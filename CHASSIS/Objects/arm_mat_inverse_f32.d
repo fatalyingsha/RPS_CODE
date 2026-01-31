@@ -1,0 +1,14 @@
+..\objects\arm_mat_inverse_f32.o: ..\Drivers\arm_mat_inverse_f32.c
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\dsp/matrix_functions.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\arm_math_types.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include\cmsis_compiler.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\ARMCC\Bin\..\include\stdint.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include\cmsis_armcc.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\ARMCC\Bin\..\include\string.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\ARMCC\Bin\..\include\math.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\ARMCC\Bin\..\include\float.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\ARMCC\Bin\..\include\limits.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\arm_math_memory.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\dsp/none.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\dsp/utils.h
+..\objects\arm_mat_inverse_f32.o: D:\keil\ARM\PACK\ARM\CMSIS-DSP\1.16.2\Include\dsp/matrix_utils.h

@@ -1,0 +1,2740 @@
+#include "balance_task.h"
+
+Balance_chassis_t b_chassis = {0};
+float V_T_gain;
+float V_Tp_gain;
+float balance_Tgain;
+float balance_Tpgain;
+
+float V_T_outlandgain;
+float V_Tp_outlandgain;
+float balance_Toutlandgain;
+float balance_Tpoutlandgain;
+
+float vw_torque = 0;
+float roll_F_output_angle = 0;
+float roll_leg_F_output = 0;
+uint8_t iout_flag;
+int16_t middle_cnt;
+int16_t seperate_cnt;
+int16_t down_cnt;
+u8 if_middle_leg;
+u8 if_low_middle_leg;
+u8 init_finish_flag;
+u8 down_flag;
+u8 down_cnt_flag;
+u8 over_slope_state=0;
+
+uint8_t allow_gimbal_init;
+u8 init_abnormal_state;
+
+
+/**
+************************************************************************************************************************
+* @Name     : balance_param_init
+* @brief    : 平衡底盘参数初始化
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+void balance_param_init(void)
+{
+    // 初始化底盘结构体，将其所有成员设置为0
+    memset(&b_chassis, 0, sizeof(Balance_chassis_t));
+    // 设置底盘的动态参考腿长
+    b_chassis.chassis_dynemic_ref.leglength = 0.15;
+
+    /*********************************正常姿态初始化Tp PID**********************************************************/
+    PID_struct_init(&b_chassis.Init_Tp_pid, POSITION_PID, 500, 200, 250, 0, 10);      // 初始化初始化Tp的PID//500, 200, 190, 0, 10    200
+
+    // 初始化左腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 90, 0, 50);
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+    /***************************************************************************************************/
+    // 初始化右腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 90, 0, 50);
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);  //25 0 7
+
+
+    /*********************************   双腿协调PID   ***************************************************/
+    /********************************* ↓↓↓↓↓↓↓ ***************************************************/
+    // 初始化双腿协调的PID控制器参数 2000, 2000, 150, 0, 3000  / 5, 3, 10, 0.001, 100
+    PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 35, 3, 9.3, 0, 1.0); //速度环
+    PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+
+    /*********************************  横滚角rollPID   ***************************************************/
+    /********************************* ↓↓↓↓↓↓↓ ***************************************************/
+
+    //小陀螺
+    PID_struct_init(&b_chassis.roll_pid_angle, POSITION_PID, 1, 1, 0.008, 0, 0.01); //// 初始化roll轴滚角的PID参数  0.012, 0.00002, 0.02  30  2.2, 0, 1
+    PID_struct_init(&b_chassis.roll_leg_F_Rotate_pid, POSITION_PID, 20, 10, 2, 0, 1);
+
+    //普通模式：1, 1, 0.008, 0, 0.01； 20, 10, 2, 0, 1
+
+    //普通模式
+    PID_struct_init(&b_chassis.roll_leg_F_pid, POSITION_PID, 600, 10, 35, 0.01, 10);
+    /********************************* 底盘旋转角速度PID   ***************************************************/
+    /********************************* ↓↓↓↓↓↓↓ ***************************************************/
+    PID_struct_init(&b_chassis.vw_pid, POSITION_PID, 5, 5, 3.5, 0, 0);     // 底盘旋转角速度W*底盘半径=底盘旋转线速度=vw 5, 5, 2, 0, 0
+
+    /********************************* 底盘跟随云台PID   ***************************************************/
+    /********************************* ↓↓↓↓↓↓↓ ***************************************************/
+    PID_struct_init(&b_chassis.pid_follow_gim,POSITION_PID,3, 200, 8, 0, 1);// 初始化跟随云台的PID
+
+
+    PID_struct_init(&b_chassis.pid_yaw_dist,POSITION_PID,10, 200, 5, 0, 0);
+
+    /**********************************侧装甲板*********************************************/
+    PID_struct_init(&b_chassis.pid_chassis_side,POSITION_PID,6, 200, 8, 0, 1);// 初始化跟随云台的PID
+
+    /***********************************************************************************/
+    PID_struct_init(&b_chassis.pid_seperate_gim,   POSITION_PID, 500, 200, 0.5, 0, 5); // 初始化分离云台的PID// 500, 200, 0.5, 0, 5
+
+    PID_struct_init(&b_chassis.over_step_phi0_left_pid, POSITION_PID, 200, 200, 100, 0, 10);      // 初始化初始化Tp的PID//500, 200, 190, 0, 10    200
+    PID_struct_init(&b_chassis.over_step_phi0_right_pid, POSITION_PID, 200, 200, 100, 0, 10);      // 初始化初始化Tp的PID//500, 200, 190, 0, 10    200
+
+    /********************************* 异常姿态初始化处理PID   ***************************************************/
+    /********************************* ↓↓↓↓↓↓↓ ***************************************************/
+    PID_struct_init(&b_chassis.Init_Tp_dphi0_pid, POSITION_PID, 350, 200, 30, 0, 0);      // 初始化初始化Tp的PID//100, 200, 30, 0, 0
+    PID_struct_init(&b_chassis.Init_Tp_phi0_pid, POSITION_PID,  1, 2, 1, 0, 0);  // 初始化初始化Tp的PID//500, 200, 40, 0, 60
+
+    /*************************************************************************************************/
+    PID_struct_init(&b_chassis.Init_dphi0_pid_left, POSITION_PID,  12, 2, 0.4, 0.001, 0);  // 初始化初始化Tp的PID//500, 200, 40, 0, 60
+    PID_struct_init(&b_chassis.Init_dphi0_pid_right, POSITION_PID, 12, 2, 0.4, 0.001, 0); // 初始化初始化Tp的PID//500, 200, 40, 0, 60  腿很短时 3, 8, 0.8, 0, 0
+	
+    PID_struct_init(&b_chassis.Init_phi0_pid_left, POSITION_PID, 50, 200, 20, 0, 0);      
+	PID_struct_init(&b_chassis.Init_phi0_pid_right, POSITION_PID, 50, 200, 20, 0, 0);      
+
+
+	
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_chassis_task
+* @brief    : 平衡底盘总控制任务
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+float lp_data = 0;
+float difference_left,difference_right,left_acc,right_acc;
+
+void chassis_task(void)
+{
+    //  lp_data = Lpf_1st_calcu(&ACC_LPF, chassis_gyro.y_Acc, 10, 0.001); // 加速度计低通滤波
+    if(fabs(b_chassis.chassis_ref.vw)>0.8)//0.75
+    {
+        Mileage_kalman_filter_calc(&Mileage_kalman_filter,
+                                   ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].angle + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].angle) / 2.0f) * WHEEL_R,
+                                   ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].gyro + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].gyro) / 2.0f) * WHEEL_R,
+                                   0);
+    }
+    else
+    {
+        Mileage_kalman_filter_calc(&Mileage_kalman_filter,
+                                   ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].angle + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].angle) / 2.0f) * WHEEL_R,
+                                   ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].gyro + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].gyro) / 2.0f) * WHEEL_R,
+                                   chassis_gyro.y_Acc);
+    }
+    difference_left = difference_left_calc(balance_chassis.Driving_Encoder[0].gyro,0.001);
+    difference_right =difference_right_calc(balance_chassis.Driving_Encoder[1].gyro,0.001);
+    left_acc  = left_acc* 0.60f + difference_left * 0.40f;
+    right_acc = right_acc*0.60f + difference_right* 0.40f;
+
+    //测试用（读取阈值）/////////////////////////////
+
+    // chassis_Init_handle(); // 初始化收腿
+
+    ////////////////////////////////////////////////
+
+    if (time_tick % 2 == 0)
+    {
+        chassis_cmd_selest();
+        switch (b_chassis.ctrl_mode) // 状态机选择底盘控制模式
+        {
+        case CHASSIS_RELAX: // 底盘空闲模式
+        {
+            // 置零所有关节的输出//////////////////////////
+            b_chassis.joint_T[0] = 0;
+            b_chassis.joint_T[1] = 0;
+            b_chassis.joint_T[2] = 0;
+            b_chassis.joint_T[3] = 0;
+            b_chassis.driving_T[0] = 0;
+            b_chassis.driving_T[1] = 0;
+            //////////////////////////////////////////////////
+
+            // 置零Tp/////////////////////////////////////
+            balance_Tpgain = 0;
+            balance_Tpoutlandgain = 0;
+            b_chassis.chassis_ref.pitch = 0;
+            b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+            b_chassis.normal_Y_erroffset = NORMAL_Y_ERROFFSET;
+            b_chassis.roll_pid_angle.iout = 0;
+            b_chassis.chassis_ref.roll = 0;
+            ///////////////////////////////////////////////////
+
+            //置零标志位///////////////////////////////////
+            b_chassis.init_state  = 0;
+            b_chassis.rotate_flag = 0;
+            b_chassis.jump_flag = 0;
+            jump_state = 0;
+            over_slope_state=0;
+            jump_feedfront=0;
+ 
+            if_low_middle_leg=0;
+     		if_middle_leg=0;
+			
+            init_abnormal_state=0;
+
+            step_flag=0;
+            step_state=0;
+
+            state_flag_2=0;
+            state_flag_1=0;
+			usart_chassis_data.fn_2_trigger_flag=0;
+            //////////////////////////////////////////////
+
+            b_chassis.left_leg.leg_FN = 100;
+            b_chassis.right_leg.leg_FN = 100;
+            //////////////////////////////////////////////
+        }
+        break;
+        case CHASSIS_STOP: // 底盘停止模式
+        {
+            chassis_stop_handle();
+            balance_task(); // 平衡底盘解算
+        }
+        break;
+        case CHASSIS_INIT: // 底盘初始化模式
+        {
+            if(usart_chassis_data.fn_2_trigger_flag==1)
+			{
+				chassis_single_leg_handle();
+			}
+			else
+            chassis_Init_handle(); // 初始化收腿
+        }
+        break;
+        case CHASSIS_STAND_MODE: // 底盘起立模式
+        {
+            chassis_standup_handle(); // 起立模式
+            balance_task();           // 平衡底盘解算
+        }
+        break;
+        case MANUAL_FOLLOW_REMOTE: //
+        {
+            if (b_chassis.jump_flag==1) // 如果跳跃标志位为1//if (b_chassis.jump_flag==1)
+            {
+                over_slope_state=0;
+                balance_jump_handle(); // 跳跃任务
+                balance_task();        // 平衡底盘解算任务
+            }
+
+            else if(usart_chassis_data.overstep_cmd==1)
+            {
+                balance_over_slope_handle();
+                balance_task();
+            }
+            else if(down_flag==1)
+            {
+                balance_down_run_handle();
+            }
+            else // 否则
+            {
+                over_slope_state=0;
+                chassis_follow_gim_handle();
+                balance_task();
+            }
+        }
+        break;
+		 case CHASSIS_SEPARATE:
+        {
+            chassis_seperate_handle();
+            balance_task();
+        }
+        break;
+        case CHASSIS_ROTATE: // 小陀螺
+        {
+            chassis_rotate_handle(); // 小陀螺模式
+            balance_task();
+        }
+        break;
+        case CHASSIS_REVERSE:
+        {
+            chassis_side_handle();
+            balance_task();
+        }
+        break;
+        default:
+            break;
+        }
+		if(usart_chassis_data.overstep_cmd==1)
+		{
+			b_chassis.max_speed = 2.0;
+
+		}
+		else 
+		{
+        if(judge_rece_mesg.game_robot_state.robot_level<=2)
+        {
+			if(can_capacitance_message.cap_voltage_filte>20)
+			{
+				b_chassis.max_speed = 2.0;
+			}
+			else
+                b_chassis.max_speed = 1.8;  // 最大速度 
+        }
+        else
+        {
+            
+			if(can_capacitance_message.cap_voltage_filte<6)
+			{
+			   b_chassis.max_speed = 1.8;  // 最大速度
+
+			}
+			else
+			b_chassis.max_speed = 2.7;  // 最大速度
+        }
+	}
+        b_chassis.min_speed = -1.4; // 最小速度
+
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_cmd_select
+* @brief    : 平衡底盘模式与命令处理
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+float theta_test;
+void chassis_cmd_selest(void)
+{
+    b_chassis.last_ctrl_mode = b_chassis.ctrl_mode;
+    if(        balance_chassis.Driving_Encoder[0].if_online
+            && balance_chassis.Driving_Encoder[1].if_online && time_tick > 2000)
+    {
+        // 如果控制模式不是初始化且不是待机模或获串口底盘数据底盘模式为零
+        if (      (b_chassis.ctrl_mode != CHASSIS_INIT
+                && b_chassis.ctrl_mode != CHASSIS_STAND_MODE)
+                || usart_chassis_data.chassis_mode == 0)
+        {
+            // 更新盘控制模式设为串口数据控制底盘模式
+            b_chassis.ctrl_mode = usart_chassis_data.chassis_mode;
+        }
+        if(judge_rece_mesg.game_robot_state.power_management_chassis_output==0||judge_rece_mesg.game_robot_state.current_HP==0)
+        {
+            b_chassis.ctrl_mode=CHASSIS_RELAX;
+        }
+        // 如果控制模式不是初始化
+        if (b_chassis.ctrl_mode != CHASSIS_INIT)
+        {
+            // 更新roll轴的参考值
+            b_chassis.chassis_ref.roll =usart_chassis_data.roll;
+            // 更新y轴速度的参考值
+            b_chassis.chassis_dynemic_ref.vy = usart_chassis_data.vy;
+            // 更新x轴速度的参考值
+            b_chassis.chassis_dynemic_ref.vx = usart_chassis_data.vx;
+            //速度限幅
+            VAL_LIMIT(b_chassis.chassis_dynemic_ref.vy, b_chassis.min_speed, b_chassis.max_speed);
+            VAL_LIMIT(b_chassis.chassis_dynemic_ref.vx, -1.2, 1.2);
+        }
+        // 如果上一次的控制模式是空闲且当前控制模式不是初始化
+        if (   b_chassis.ctrl_mode != CHASSIS_INIT
+                && usart_chassis_data.chassis_mode != CHASSIS_RELAX
+                && b_chassis.last_ctrl_mode == CHASSIS_RELAX
+                && usart_chassis_data.if_follow_gim==1)
+        {
+            // 更新控制模式
+            b_chassis.ctrl_mode = usart_chassis_data.chassis_mode;
+        }
+        // 如果上一次的控制模式是空闲且当前控制模式不是空闲
+        if (  b_chassis.last_ctrl_mode == CHASSIS_RELAX
+                && b_chassis.ctrl_mode != CHASSIS_RELAX)
+        {
+            // 更新控制模式为初始化
+            b_chassis.ctrl_mode = CHASSIS_INIT;
+        }
+        if ( ( (b_chassis.ctrl_mode == usart_chassis_data.chassis_mode &&( fabs(chassis_gyro.pitch_Angle) > 15&&if_middle_leg!=1) && usart_chassis_data.chassis_mode  != CHASSIS_RELAX&&usart_chassis_data.ctrl_mode!=1)
+                || (b_chassis.ctrl_mode == usart_chassis_data.chassis_mode && ((b_chassis.balance_loop.theta> 0.71f)||((b_chassis.theta_left> 0.50f||b_chassis.theta_right>0.50f||fabs(chassis_gyro.pitch_Angle) > 40)&&if_middle_leg==1)|| (b_chassis.balance_loop.theta< -0.40f)) && usart_chassis_data.chassis_mode  != CHASSIS_RELAX&&usart_chassis_data.ctrl_mode!=1)
+                || (( (fabs(chassis_gyro.pitch_Angle) > 40&&fabs(chassis_gyro.pitch_Angle)<100 )||fabs(chassis_gyro.roll_Angle)>95)&&usart_chassis_data.Rollover_posture_cmd==1) )
+                &&b_chassis.jump_flag!=1 // &&step_flag!=1////step_flag!=1//&& b_chassis.ctrl_mode == usart_chassis_data.chassis_mode//  || ((b_chassis.left_leg.phi0>0.7&&b_chassis.left_leg.phi0<1.3)&&(b_chassis.right_leg.phi0>0.7&&b_chassis.right_leg.phi0<1.3)
+           )
+        {
+            // 更新控制模式为初始化
+            b_chassis.ctrl_mode = CHASSIS_INIT;
+        }
+        // 如果串口跳跃命令为1
+        if (usart_chassis_data.jump_cmd==1&&down_flag!=1)
+        {
+            // 跳跃标志位为1，等于串口跳跃命令
+            b_chassis.jump_flag = usart_chassis_data.jump_cmd;
+
+        }	
+        if(usart_chassis_data.low_speed_cmd==1&&down_flag!=1)
+        {
+            b_chassis.jump_flag=usart_chassis_data.low_speed_cmd;
+			if_low_middle_leg =usart_chassis_data.low_speed_cmd;
+			
+        }
+
+        if(b_chassis.chassis_dynemic_ref.vx != 0||b_chassis.ctrl_mode == CHASSIS_REVERSE)//b_chassis.chassis_dynemic_ref.vx != 0||TF02_state==0
+        {
+            b_chassis.jump_flag = 0;
+			if_low_middle_leg=0;
+     		if_middle_leg=0;
+            //step_flag=0;
+
+        }
+        b_chassis.chassis_dynemic_ref.leglength = usart_chassis_data.cmd_leg_length;
+    }
+    else
+    {
+        // 否则更新控制模式为空闲
+        b_chassis.ctrl_mode = CHASSIS_RELAX;
+    }
+    // 中间腿长模式逻辑
+    if (if_middle_leg)
+    {
+        // 中间腿长计数器加一
+        middle_cnt++;
+
+    }
+    // 如果中间腿长计数器等于1000
+    if (middle_cnt ==1000||init_finish_flag==1)
+    {
+		  // 中间腿长模式标志位为0
+        if_middle_leg = 0;
+		if_low_middle_leg=0;
+        // 清除计数器
+        middle_cnt = 0;
+      
+    }
+
+    if(b_chassis.ctrl_mode != CHASSIS_SEPARATE)
+    {
+        seperate_cnt = 0;
+
+    }
+    if(usart_chassis_data.ctrl_mode==1)
+    {
+        down_flag=1;
+        down_cnt_flag=1;
+    }
+    else
+    {
+//        down_run_finish_flag=1;
+//        if(can_capacitance_message.cap_voltage_filte > 4&&down_cnt > 1000)
+//        {
+        down_flag = 0;
+        down_cnt_flag = 0;
+        down_cnt = 0;
+        //  }
+    }
+//    if(down_flag==1)
+//    {
+//        b_chassis.ctrl_mode=CHASSIS_DOWN_MODE;
+//    }
+
+    if(down_cnt_flag==1)
+    {
+        down_cnt++;
+    }
+    if(b_chassis.ctrl_mode != CHASSIS_ROTATE)
+    {
+        iout_flag = 0;
+    }
+    get_remote_angle();
+    if (b_chassis.chassis_dynemic_ref.vx == 0) // 如果x轴期望速度为0
+    {
+        VAL_LIMIT(b_chassis.chassis_ref.remote_speed, b_chassis.min_speed, b_chassis.max_speed); // 速度限幅
+    }
+    else
+    {
+        VAL_LIMIT(b_chassis.chassis_ref.remote_speed, -1.5, 1.5);
+    }
+}
+/**
+************************************************************************************************************************
+* @Name     : chassis_standup_handle
+* @brief    : 起立模式
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+void chassis_standup_handle(void)
+{
+    PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 35, 3, 9.3, 0, 1.0); //速度环
+    PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+
+    b_chassis.chassis_ref.leglength = 0.14f; // 期望腿长给0.14
+    b_chassis.chassis_ref.vy = 0;
+    b_chassis.chassis_ref.vx = 0;
+    b_chassis.chassis_ref.vw = 0;
+    b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+    if (fabs(b_chassis.balance_loop.state_err[4]) < 8 * PI / 180.0) // 如果phi角度误差小于2度
+        b_chassis.ctrl_mode = usart_chassis_data.chassis_mode;      // 将控制模式设为串口底盘模式
+}
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_Init_handle
+* @brief    : 初始化收腿
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+float target_angle;
+float ecd_speed;
+float vw_angle;
+
+float  phi0_test_0_2pi,speed_ref;
+float  left_leg_phi1_test,right_leg_phi1_test;
+float phi0_test;
+uint16_t init_cnt;
+u8 state_flag_1=0,state_flag_2=0;
+float  Driving_T_left,Driving_T_right;
+
+void chassis_Init_handle(void)
+{
+
+	jump_state=0;
+	b_chassis.jump_flag = 0;
+	
+    PID_struct_init(&b_chassis.Init_Tp_pid, POSITION_PID, 500, 200, 180, 0, 10);      // 初始化初始化Tp的PID//500, 200, 40, 0, 60    200
+
+    // 初始化左腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 25, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+    /***************************************************************************************************/
+    // 初始化右腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 25, 0, 0);  //25 0 7
+
+    b_chassis.chassis_ref.vy = 0; // 初始化速度为0
+    b_chassis.chassis_ref.vx = 0;
+    b_chassis.chassis_ref.vw = 0;
+    VMC_data_get(&b_chassis.left_leg, balance_chassis.joint_Encoder[2].angle * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[2].gyro * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[1].angle * JM3_POLARITY  + PI,
+                 balance_chassis.joint_Encoder[1].gyro * JM3_POLARITY);
+
+    VMC_data_get(&b_chassis.right_leg, balance_chassis.joint_Encoder[3].angle * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[3].gyro * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[0].angle * JM4_POLARITY + PI,
+                 balance_chassis.joint_Encoder[0].gyro * JM4_POLARITY);
+    float left_leg_phi1 = normalize_angle_pi(b_chassis.left_leg.phi1);
+    float right_leg_phi1 = normalize_angle_pi(b_chassis.right_leg.phi1);
+    float phi0_0_2pi_left =transform_angle_0_2pi(b_chassis.left_leg.phi0-1.57f);
+    float phi0_0_2pi_right=transform_angle_0_2pi(b_chassis.right_leg.phi0-1.57f);
+    float phi0_0_2pi = (phi0_0_2pi_left+phi0_0_2pi_right)/2.0f;
+
+    left_leg_phi1_test =left_leg_phi1;
+    right_leg_phi1_test=right_leg_phi1;
+    phi0_test_0_2pi=phi0_0_2pi_left;
+
+    b_chassis.balance_loop.theta = ((((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f) - chassis_gyro.pitch_Angle * PI / 180.0f);
+    b_chassis.balance_loop.L0 = (b_chassis.left_leg.l0 + b_chassis.right_leg.l0) / 2.0f;
+    //对dphi0出现NUN情况的处理
+    if (isnan(b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0))
+    {
+        b_chassis.right_leg.dphi0 = 0.0f;
+        b_chassis.left_leg.dphi0 = 0.0f;
+    }
+    float dphi0= (JM1_POLARITY*b_chassis.right_leg.dphi0 + JM2_POLARITY*b_chassis.left_leg.dphi0)/2.0f;
+    float phi0 = ((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f; // 计算Phi0
+    phi0_test=phi0;
+    //翻车姿态
+    if (    ((left_leg_phi1<1.1f&& left_leg_phi1>-2.5&&b_chassis.left_leg.l0>0.28 &&fabs(chassis_gyro.pitch_Angle)<30&&fabs(chassis_gyro.roll_Angle)<95)  ||
+            (right_leg_phi1< 1.1f&&right_leg_phi1>-2.5&&b_chassis.right_leg.l0>0.28&&fabs(chassis_gyro.pitch_Angle)<30&&fabs(chassis_gyro.roll_Angle)<95))
+       )
+    {
+        b_chassis.init_state = 2;
+        allow_gimbal_init=1;
+    }
+    else if((fabs(chassis_gyro.pitch_Angle) > 45&&fabs(chassis_gyro.pitch_Angle)<100)||fabs(chassis_gyro.roll_Angle)>95)
+    {
+        b_chassis.init_state =3;
+        allow_gimbal_init=0;
+    }
+    else //正常姿态初始化
+    {
+        allow_gimbal_init=1;
+
+        if(      b_chassis.balance_loop.L0<0.15&&
+                (chassis_gyro.pitch_Angle>13.0f||
+                 ((phi0_0_2pi_right<6.2&&phi0_0_2pi_right>5.2)&&(phi0_0_2pi_left<6.2&&phi0_0_2pi_left>5.2))
+                ))
+        {
+            b_chassis.init_state = 4;
+        }
+        else
+        {
+            b_chassis.init_state = 1;
+        }
+    }
+    switch (b_chassis.init_state)//状态机
+    {
+    case 1:
+    {
+        if(fabs(b_chassis.left_leg.l0-b_chassis.right_leg.l0)>0.08)
+        {
+            if(b_chassis.left_leg.l0>b_chassis.right_leg.l0)
+            {
+                float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid,  b_chassis.right_leg.phi0, b_chassis.left_leg.phi0);
+                init_tp_calc(b_chassis.left_leg.l0,0,Init_Tp);
+                motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],0,0,JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+                // 电机输出限幅
+                limit_outer();
+
+            }
+            else if(b_chassis.left_leg.l0<b_chassis.right_leg.l0)
+            {
+                float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid,  b_chassis.left_leg.phi0, b_chassis.right_leg.phi0);
+                init_tp_calc(b_chassis.right_leg.l0,0,Init_Tp);
+                motor_torque_set(0,JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],0,0,0);
+                // 电机输出限幅
+                limit_outer();
+            }
+        }
+        //正常姿态初始化处理
+        else if ((fabs(phi0) >= 3 * PI / 180)&&fabs(b_chassis.left_leg.l0-b_chassis.right_leg.l0)<0.08)
+        {
+             init_cnt++;
+            if(init_abnormal_state==1&&init_cnt<1000)
+            {
+                if(b_chassis.balance_loop.L0>0.17&&init_cnt<500)
+                {
+                    // 双腿协调pid
+
+                    float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.14f,harmonize_inner,0);
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+                }
+                else
+                {
+                    float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid, phi0, 0.86);
+
+                    float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.15f,harmonize_inner,Init_Tp);
+
+                    target_angle = b_chassis.chassis_ref.remote_angle;
+                    ecd_speed = b_chassis.chassis_ref.remote_speed;
+                    b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy, ecd_speed); // 将当前值调整到参考值
+                    b_chassis.chassis_ref.vw = - pid_calc(&b_chassis.pid_follow_gim, b_chassis.yaw_angle__pi_pi, target_angle);
+                    b_chassis.balance_loop.dx = Mileage_kalman_filter.velocity; //
+
+                    vw_torque = pid_calc(&b_chassis.vw_pid, chassis_gyro.yaw_Gyro * PI / 180.0f, b_chassis.chassis_ref.vw);
+                    b_chassis.vw_limit_rate = 0.8;
+                    b_chassis.balance_loop.state_err[3] = b_chassis.chassis_ref.vy - b_chassis.balance_loop.dx;
+                    b_chassis.balance_loop.lqrOutT=b_chassis.balance_loop.state_err[3]*2;
+                    Driving_T_left = (b_chassis.balance_loop.lqrOutT / 2.0f + vw_torque * b_chassis.vw_limit_rate / 2.0f) * LEFT_WHEEL_POLARITY;
+                    Driving_T_right = (b_chassis.balance_loop.lqrOutT / 2.0f - vw_torque * b_chassis.vw_limit_rate / 2.0f) * RIGHT_WHEEL_POLARITY;
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],Driving_T_left,Driving_T_right);
+                }
+            }
+            else if(init_abnormal_state==2&&b_chassis.balance_loop.L0>0.18)
+            {
+                float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                init_tp_calc(0.14f,harmonize_inner,0);
+                motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+            }
+            else
+            {
+                init_abnormal_state=0;
+                float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid, phi0, 0);
+                // 双腿协调pid
+                float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                init_tp_calc(0.14f,harmonize_inner,Init_Tp);
+                motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+            }
+            // 电机输出限幅
+            limit_outer();
+        }
+        else
+        {
+            init_cnt=0;
+            init_finish_flag=1;
+
+			if_low_middle_leg=0;
+     		if_middle_leg=0;
+            b_chassis.ctrl_mode = CHASSIS_STAND_MODE;
+        }
+    }
+    break;
+    case 2:
+    {
+        //翻车姿态处理
+        uint8_t left_init_flag = 0, right_init_flag = 0;
+	 if(usart_chassis_data.gimbal_data_if_finish_Init==1)//
+	 {
+        if (left_leg_phi1<1.1&& left_leg_phi1>-2.5)
+        {
+            left_init_flag = 2;
+        }
+        else
+        {
+            left_init_flag=1;
+            b_chassis.joint_T[1] = 0;
+            b_chassis.joint_T[2] = 0;
+            b_chassis.driving_T[0] = 0;
+        }
+        if (right_leg_phi1< 1.1&&right_leg_phi1>-2.5)
+        {
+            right_init_flag = 2;
+        }
+        else
+        {
+            right_init_flag=1;
+            b_chassis.joint_T[0] = 0;
+            b_chassis.joint_T[3] = 0;
+            b_chassis.driving_T[1] = 0;
+        }
+        if (left_init_flag == 2)
+        {
+            float Init_dphi0_Tp = pid_calc(&b_chassis.Init_dphi0_pid_left, balance_chassis.joint_Encoder[1].rate_rpm, 40);
+            b_chassis.joint_T[1] = Init_dphi0_Tp;
+            b_chassis.joint_T[2] = 0;
+            b_chassis.driving_T[0] = 0;
+        }
+        if (right_init_flag == 2)
+        {
+            float Init_dphi0_Tp = pid_calc(&b_chassis.Init_dphi0_pid_right, balance_chassis.joint_Encoder[0].rate_rpm, -40);
+            b_chassis.joint_T[0] = Init_dphi0_Tp;
+            b_chassis.joint_T[3] = 0;
+            b_chassis.driving_T[1] = 0;
+        }
+        if (left_init_flag == 1 && right_init_flag == 1)
+        {
+            left_init_flag = 0;
+            right_init_flag = 0;
+            b_chassis.init_state = 1;
+        }	
+       limit_outer();		
+	}
+	
+   }
+    break;
+    case 3:
+    {
+        PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 40, 3, 10, 0, 1.0); //速度环
+        PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+
+        PID_struct_init(&b_chassis.Init_Tp_phi0_pid, POSITION_PID,  1, 2, 1, 0, 0);  // 初始化初始化Tp的PID//500, 200, 40, 0, 60
+
+        if((fabs(chassis_gyro.pitch_Angle) > 40&&fabs(chassis_gyro.pitch_Angle)<100)||fabs(chassis_gyro.roll_Angle)>95)
+        {
+            if(chassis_gyro.pitch_Angle<0)
+            {
+                if(state_flag_1==0)
+                {
+                    float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float  harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.36,harmonize_inner,0);
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+
+                    if(fabs(phi0_0_2pi_right - phi0_0_2pi_left)<0.10)
+                    {
+                        state_flag_1++;
+                    }
+                }
+                else if(state_flag_1==1)
+                {
+
+                    float Init_Tp_dphi0 =pid_calc_angle_dir(&b_chassis.Init_Tp_phi0_pid, phi0_0_2pi,5.0,0);//顺时针
+                    float Init_Tp_out   = pid_calc(&b_chassis.Init_Tp_dphi0_pid,dphi0,Init_Tp_dphi0);
+
+                    // 双腿协调pid
+                    float  harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float  harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner,(b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.36,harmonize_inner,Init_Tp_out);
+                    // 电机输出限幅
+
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+                }
+            }
+            else
+            {
+                if(state_flag_2==0)
+                {
+                    float  harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float  harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.36,harmonize_inner,0);
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+
+                    if(fabs(phi0_0_2pi_right - phi0_0_2pi_left)<0.10)
+                    {
+                        state_flag_2++;
+                    }
+                }
+                else if(state_flag_2==1)
+                {
+
+                    float Init_Tp_dphi0 =pid_calc_angle_dir(&b_chassis.Init_Tp_phi0_pid, phi0_0_2pi,0.8,1);//逆时针
+                    float Init_Tp_out   = pid_calc(&b_chassis.Init_Tp_dphi0_pid,dphi0,Init_Tp_dphi0);
+//                    // 双腿协调pid
+                    float  harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+                    float  harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+                    init_tp_calc(0.36,harmonize_inner,Init_Tp_out);
+                    // 电机输出限幅
+                    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+                }
+            }
+            limit_outer();
+        }
+        else
+        {
+            state_flag_2=0;
+            state_flag_1=0;
+            motor_torque_set(0,0,0,0,0,0);
+        }
+    }
+    break;
+    case 4:
+    {
+        float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid,  b_chassis.left_leg.phi0-1.57f, 0.48);
+        init_tp_calc(0.14f,0,Init_Tp);
+        motor_torque_set(0,JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],0,0,0);
+        // 电机输出限幅
+        limit_outer();
+    }
+    break;
+    default:
+        break;
+    }
+}
+void limit_outer(void)
+{
+    VAL_LIMIT(b_chassis.joint_T[1], -JOINT_MAX_T, JOINT_MAX_T);
+    VAL_LIMIT(b_chassis.joint_T[2], -JOINT_MAX_T, JOINT_MAX_T);
+    VAL_LIMIT(b_chassis.driving_T[0], -WHEEL_MAX_T, WHEEL_MAX_T);
+
+    VAL_LIMIT(b_chassis.joint_T[0], -JOINT_MAX_T, JOINT_MAX_T);
+    VAL_LIMIT(b_chassis.joint_T[3], -JOINT_MAX_T, JOINT_MAX_T);
+    VAL_LIMIT(b_chassis.driving_T[1], -WHEEL_MAX_T, WHEEL_MAX_T);
+}
+
+void init_tp_calc(float ref_leglength,float harmonize,float init_Tp)
+{
+    b_chassis.chassis_ref.leglength = ref_leglength; // 期望腿长给0.2
+    // 腿部竖直力F的计算
+    b_chassis.left_leg.leg_length_outer = pid_calc(&b_chassis.left_leg.leglengthpid_outer, b_chassis.left_leg.l0, b_chassis.chassis_ref.leglength);
+    b_chassis.left_leg.leg_F = pid_calc(&b_chassis.left_leg.leglengthpid_inner, b_chassis.left_leg.dl0, b_chassis.left_leg.leg_length_outer);
+
+    b_chassis.right_leg.leg_length_outer = pid_calc(&b_chassis.right_leg.leglengthpid_outer, b_chassis.right_leg.l0, b_chassis.chassis_ref.leglength);
+    b_chassis.right_leg.leg_F = pid_calc(&b_chassis.right_leg.leglengthpid_inner, b_chassis.right_leg.dl0, b_chassis.right_leg.leg_length_outer);
+
+    leg_conv(b_chassis.left_leg.leg_F, (init_Tp  - harmonize) / 2.0f, b_chassis.left_leg.phi1, b_chassis.left_leg.phi4, b_chassis.left_leg.T);
+    leg_conv(b_chassis.right_leg.leg_F, (init_Tp + harmonize) / 2.0f, b_chassis.right_leg.phi1, b_chassis.right_leg.phi4, b_chassis.right_leg.T);
+
+}
+void motor_torque_set(float Joint_T_0,float Joint_T_1,float Joint_T_2,float Joint_T_3,float Driving_T_1,float Driving_T_2)
+{
+    //左
+    b_chassis.joint_T[1] = Joint_T_1;//前
+    b_chassis.joint_T[2] = Joint_T_2;
+    b_chassis.driving_T[0] = Driving_T_1;
+    //右
+    b_chassis.joint_T[0] = Joint_T_0;//前
+    b_chassis.joint_T[3] = Joint_T_3;
+    b_chassis.driving_T[1] = Driving_T_2;
+}
+
+/**
+************************************************************************************************************************
+* @Name     : get_remote_angle
+* @brief    : 获取底盘转角
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+float final_speed;
+float test_angle;
+void get_remote_angle(void)
+{
+    float vy;
+    float vx;
+    float temp_angle;
+    b_chassis.yaw_angle_0_2pi = usart_chassis_data.yaw_Encoder_ecd_angle;
+    if (b_chassis.yaw_angle_0_2pi > PI) // 如果偏航角度大于π,将底盘的偏航角度转换为-π到π范围内
+    {
+        b_chassis.yaw_angle__pi_pi = b_chassis.yaw_angle_0_2pi - (2 * PI);
+    } // 进行转换
+    else
+    {
+        b_chassis.yaw_angle__pi_pi = b_chassis.yaw_angle_0_2pi;
+    } // 否则直接赋值
+
+    vy = b_chassis.chassis_dynemic_ref.vy; // 获取底盘的y轴速度
+    vx = b_chassis.chassis_dynemic_ref.vx; // 获取底盘的x轴速度
+    if (vy==0 && vx == 0)     // 如果y轴速度和x轴速度都为0
+    {
+        if(b_chassis.ctrl_mode==CHASSIS_REVERSE)
+        {
+            b_chassis.chassis_ref.remote_angle = PI/4;
+            b_chassis.chassis_ref.remote_speed = 0;
+        } else
+        {
+            // 否则将底盘的转角和速度设为0
+            b_chassis.chassis_ref.remote_angle = 0;
+            b_chassis.chassis_ref.remote_speed = 0;
+        }
+    }
+    else
+    {
+        // 如果y轴速度和x轴速度不都为0
+        b_chassis.chassis_ref.remote_speed = sqrt((vx * vx) + (vy * vy)); // 计算速度
+        temp_angle = atan2(vy, vx) - 1.57f;                              // 计算角度
+        if (temp_angle < -PI) // 如果角度小于-π，进行调整
+        {
+            b_chassis.chassis_ref.remote_angle = temp_angle + 2 * PI;
+        }
+        else // 否则直接赋值
+        {
+            b_chassis.chassis_ref.remote_angle = temp_angle;
+        }
+    }
+}
+
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_follow_gim_handle
+* @brief    : 底盘跟随云台
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+
+
+void chassis_follow_gim_handle(void)
+{
+    PID_struct_init(&b_chassis.roll_pid_angle, POSITION_PID, 1, 1, 0.008, 0, 0.01); //// 初始化roll轴滚角的PID参数  0.012, 0.00002, 0.02  30  2.2, 0, 1
+    PID_struct_init(&b_chassis.roll_leg_F_Rotate_pid, POSITION_PID, 20, 10, 2, 0, 1);
+    if(if_middle_leg)
+    {
+		if(if_low_middle_leg)
+		{
+	       b_chassis.chassis_ref.leglength =trackRamp_leg(0.0015,b_chassis.chassis_ref.leglength,0.16); //trackRamp_leg(0.002,b_chassis.chassis_ref.leglength,0.27);
+		}
+		else
+		{
+          init_abnormal_state=1;
+          b_chassis.chassis_ref.leglength =trackRamp_leg(0.002,b_chassis.chassis_ref.leglength,0.27); //trackRamp_leg(0.002,b_chassis.chassis_ref.leglength,0.27);
+		}
+    }
+    else
+    {
+        b_chassis.chassis_ref.leglength = trackRamp_leg(0.001,b_chassis.chassis_ref.leglength,b_chassis.chassis_dynemic_ref.leglength);//
+    }
+
+    PID_struct_init(&b_chassis.pid_follow_gim,POSITION_PID,6, 200, 8, 0, 1);// 初始化跟随云台的PID 8, 200, 8, 0, 1
+
+    if(b_chassis.chassis_dynemic_ref.leglength>0.30)
+    {
+		init_abnormal_state=2;
+        PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 45, 3, 9.8, 0, 1.0); //速度环
+        PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 30, 3, 15.5, 0, 0.8); //角度环
+        // 初始化左腿的长度PID参数  50 0 700
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 10);
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 5000, 20000, 25, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+        /***************************************************************************************************/
+        // 初始化右腿的长度PID参数  50 0 700
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 10);
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 5000, 20000, 25, 0, 0);  //25 0 7
+    }
+    else
+    {
+		init_abnormal_state=0;
+        PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 35, 3, 9.2, 0, 1.0); //速度环
+        PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+
+        // 初始化左腿的长度PID参数  50 0 700
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 10);
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 25, 0, 0);    //气弹簧参数 85, 0, 10  30, 0, 0 ， 95, 0, 50
+
+        /***************************************************************************************************/
+        // 初始化右腿的长度PID参数  50 0 700
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 10);
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 25, 0, 0);  //25 0 7
+    }
+    b_chassis.chassis_ref.vx = b_chassis.chassis_dynemic_ref.vx;
+    // 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+    if (fabs(b_chassis.balance_loop.dx) > 0.5//0.5
+            ||b_chassis.chassis_ref.vy != 0
+            ||fabs(b_chassis.chassis_ref.vw) >= 1.75//1.75
+            ||usart_chassis_data.ctrl_mode==1)
+    {
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+    }		// 位置等于x，err为0
+    else
+    {
+        b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0005 * TIME_STEP; // 否则加上err补偿
+    }
+    if (fabs(b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi) < PI / 2) // 如果云台角度与底盘偏航角差值小于PI/2,在同一象限内
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 3 * PI / 2) // 如果云台角度与底盘偏航角差值大于3*PI/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll =  usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < -3 * PI / 2) // 如果差值的绝对值小于-3π/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 0) // 如果差值的绝对值大于0
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll =  -usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < 0) // 如果差值的绝对值小于0
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+    }
+
+    b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy, ecd_speed); // 将当前值调整到参考值
+
+    b_chassis.chassis_ref.vw = - pid_calc(&b_chassis.pid_follow_gim, b_chassis.yaw_angle__pi_pi, target_angle);
+
+	
+    if(b_chassis.chassis_dynemic_ref.leglength>0.30)
+    {
+        VAL_LIMIT(b_chassis.chassis_ref.vy, -1.9, 1.9);
+    }
+	 if(fabs(b_chassis.chassis_ref.vw)>=2.0)
+	{
+	    VAL_LIMIT(b_chassis.chassis_ref.vy, -1.0, 1.0);
+	}
+
+
+    if(b_chassis.rotate_flag==1)
+    {
+        if(fabs(chassis_gyro.yaw_Gyro * PI / 180.0f) >= 0.5)
+        {
+            b_chassis.chassis_ref.vy =0;
+        }
+        else
+        {
+            b_chassis.rotate_flag=0;
+        }
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_single_leg_handle
+* @brief    : 底盘单腿控制
+* @param		: void
+* @retval   : void
+* @Note     :翻车干涉时用
+************************************************************************************************************************
+**/
+void chassis_single_leg_handle(void)
+{
+	
+    VMC_data_get(&b_chassis.left_leg, balance_chassis.joint_Encoder[2].angle * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[2].gyro * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[1].angle * JM3_POLARITY  + PI,
+                 balance_chassis.joint_Encoder[1].gyro * JM3_POLARITY);
+
+    VMC_data_get(&b_chassis.right_leg, balance_chassis.joint_Encoder[3].angle * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[3].gyro * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[0].angle * JM4_POLARITY + PI,
+                 balance_chassis.joint_Encoder[0].gyro * JM4_POLARITY);
+    float phi0_0_2pi_left =transform_angle_0_2pi(b_chassis.left_leg.phi0-1.57f);
+    float phi0_0_2pi_right=transform_angle_0_2pi(b_chassis.right_leg.phi0-1.57f);
+	
+		float phi0_ref_left  =usart_chassis_data.leg_single_angle_handle_left +phi0_0_2pi_left;
+		float phi0_ref_right =usart_chassis_data.leg_single_angle_handle_right+phi0_0_2pi_right;
+		
+		float Init_Tp_left  = pid_calc(&b_chassis.Init_phi0_pid_left,  phi0_0_2pi_left,  phi0_ref_left );	
+		float Init_Tp_right = pid_calc(&b_chassis.Init_phi0_pid_right, phi0_0_2pi_right, phi0_ref_right);
+
+	   leg_conv(0,  Init_Tp_left,  b_chassis.left_leg.phi1,  b_chassis.left_leg.phi4,  b_chassis.left_leg.T );
+       leg_conv(0,  Init_Tp_right, b_chassis.right_leg.phi1, b_chassis.right_leg.phi4, b_chassis.right_leg.T);
+
+	    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],0,0,0,0);
+	   limit_outer();
+	
+	
+}
+
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_follow_gyro
+* @brief    : 底盘跟随陀螺仪
+* @param		: void
+* @retval   : void
+* @Note     :单底盘测试用
+************************************************************************************************************************
+**/
+void chassis_follow_gyro(void)
+{
+
+    if(b_chassis.chassis_dynemic_ref.vy>0&&b_chassis.chassis_dynemic_ref.vy<0.04)
+    {
+        b_chassis.chassis_ref.vy=0;
+    }
+    else
+    {
+        b_chassis.chassis_ref.vy = b_chassis.chassis_dynemic_ref.vy;
+    }
+
+    if(b_chassis.chassis_dynemic_ref.vx>0&&b_chassis.chassis_dynemic_ref.vx<0.02)
+    {
+        b_chassis.chassis_ref.vx=0;
+    }
+    else
+        b_chassis.chassis_ref.vx = b_chassis.chassis_dynemic_ref.vx;
+
+    b_chassis.chassis_ref.roll = 0.0f;
+    if (if_middle_leg) // 如果中间腿长标志位为1
+    {
+        b_chassis.chassis_ref.leglength = 0.25f; // 设置腿长
+    }
+    else
+        b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;
+
+    if (fabs(b_chassis.chassis_ref.vx) > 0.06)
+        b_chassis.chassis_ref.vw = b_chassis.chassis_ref.vx;
+
+    if (fabs(b_chassis.balance_loop.dx) > 0.5 || fabs(b_chassis.chassis_ref.vy) > 0.15 || b_chassis.chassis_ref.vw >= 0.2) // 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+    {
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+    } // 位置等于x，err为0
+    else
+    {
+
+        b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.00001 * TIME_STEP;
+
+    } // 否则加上err补偿
+}
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_rotate_handle
+* @brief    : 小陀螺
+* @param	: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+
+void chassis_rotate_handle(void)
+{
+
+    b_chassis.rotate_flag=1;
+    PID_struct_init(&b_chassis.roll_pid_angle, POSITION_PID, 1, 1, 0.021, 0, 0.01); //// 初始化roll轴滚角的PID参数  0.03, 0.0003, 0.01  ；20, 10, 3, 0, 1
+	//VAL_LIMIT(b_chassis.roll_pid_angle.iout, -0.001, 0.001);              // 绕Z轴的角速度值限制在-15到15
+
+    PID_struct_init(&b_chassis.roll_leg_F_Rotate_pid, POSITION_PID, 20, 10, 2.96, 0, 1.0);
+    if(b_chassis.yaw_angle_0_2pi>=PI)
+    {
+        b_chassis.yaw_angle__pi_pi=b_chassis.yaw_angle_0_2pi-(2*PI);
+    }
+    else
+    {
+        b_chassis.yaw_angle__pi_pi=b_chassis.yaw_angle_0_2pi;
+    }
+    // 腿长为b_chassis.chassis_dynemic_ref.leglength
+    b_chassis.chassis_ref.leglength =0.15;
+    b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx; // b_chassis.chassis_dynemic_ref.vy*sinf(b_chassis.yaw_angle__pi_pi)+b_chassis.chassis_dynemic_ref.vx*cosf(b_chassis.yaw_angle__pi_pi);
+    b_chassis.chassis_ref.vx = 0;
+	
+
+    // 绕Z轴的角速度为USART接收的数据中的旋转速度
+    b_chassis.chassis_ref.vw = usart_chassis_data.rotate_speed;
+
+    VAL_LIMIT(b_chassis.chassis_ref.vw, -15, 15);              // 绕Z轴的角速度值限制在-15到15
+    VAL_LIMIT(b_chassis.chassis_ref.vy, -0.5, 0.5);            // y轴方向的速度值限制在-0.5到0.5
+}
+/**
+************************************************************************************************************************
+* @Name     : balance_jump_handle
+* @brief    : 跳跃任务
+* @param	: jump_state
+* @retval   : void
+* @Note     : jump_state用于记录跳跃状态
+************************************************************************************************************************
+**/
+u8    jump_state = 0;
+float jump_feedfront = 0;
+u8    jump_vm_flag;
+float distance;
+
+void balance_jump_handle(void)
+{
+    b_chassis.chassis_ref.vx = 0; // 将在X轴方向上的线速度和绕Z轴的角速度初始化为0。
+    b_chassis.chassis_ref.vw = 0;
+    init_finish_flag=0;
+
+    if (jump_state == 0)
+    {
+
+        PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 45, 3, 11, 0, 1.0); //速度环
+        PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+        PID_struct_init(&b_chassis.pid_follow_gim,POSITION_PID,10, 200, 15, 0, 1);// 初始化跟随云台的PID
+
+
+        jump_feedfront = 0;
+        b_chassis.chassis_ref.leglength = 0.14f; // 设置腿长
+
+
+        if (fabs(b_chassis.balance_loop.dx) > 0.5
+                ||b_chassis.chassis_ref.vy != 0
+                ||fabs(b_chassis.chassis_ref.vw) >= 3.0
+                ||usart_chassis_data.ctrl_mode==1)// 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+        {
+            b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+        } // 位置等于x，err为0
+        else
+        {
+
+            b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0003 * TIME_STEP;
+
+        } // 否则加上err补偿
+        if(fabs(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi)<PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi > 3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle-2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi < -3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle+2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        }
+        else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi>0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle - PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi<0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle + PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        }
+
+        b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy,ecd_speed);
+
+        VAL_LIMIT(b_chassis.chassis_ref.vy, -1.73, 1.73);//-1.5, 1.5  mea_distance<0.48
+
+        b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);  //这里不使用remoteangle，因为测距在前面
+         distance = (mea_distance)*cosf(b_chassis.balance_loop.phi)*cosf(b_chassis.yaw_angle__pi_pi);
+          if (distance<0.445&&distance>0)//mea_distance<0.48//        if (mea_distance_left<0.49||mea_distance_right<0.49)//mea_distance<0.48//  0.515
+        {
+            jump_state++;
+        }
+    }
+    else if (jump_state == 1)
+    {
+        jump_vm_flag=1;
+        jump_feedfront = 230;                                                                               // 前馈
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                                             // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                                      // 位置，直接等于x，err等于0
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 900, 0, 0);
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 150, 0, 0);    //气弹簧参数    700, 0, 0    70, 0, 0  410, 0, 0 55, 0, 0
+
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 910, 0, 0);
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 140, 0, 0);
+
+      b_chassis.chassis_ref.leglength = 0.36f;                                                          // 腿长为0.38                                                          // 腿长为0.38
+
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.015)&&(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.015)) // 如果腿长误差小于0.01
+           jump_state++;                                                                                 // 跳跃状态+1
+    }
+    else if (jump_state == 2)
+    {
+        jump_feedfront = 0; // 前馈
+
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                          // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                   // 位置，直接等于x，err等于0
+
+        b_chassis.chassis_ref.leglength = 0.14f;                                       // 腿长
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+        {
+            PID_struct_init(&b_chassis.leg_harmonize_pid_inner, POSITION_PID, 35, 3, 9.3, 0, 1.0); //速度环
+            PID_struct_init(&b_chassis.leg_harmonize_pid_outer, POSITION_PID, 50, 3, 35	, 0, 0.8); //角度环
+            // 初始化左腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 20);
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+            PID_struct_init(&b_chassis.pid_follow_gim,POSITION_PID,4, 200, 8, 0, 1);// 初始化跟随云台的PID
+
+            /***************************************************************************************************/
+            // 初始化右腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 20);
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);  //25 0 7
+            jump_state = 0;                                                                                   // 跳跃状态标志位归零
+            b_chassis.jump_flag = 0;                                                                       // 跳跃任务标志位为0
+            if_middle_leg = 1;
+            // 中间腿标志位为1
+        }
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_jump_distance_yaw_handle
+* @brief    : 跳跃任务测试版-双测距yaw角闭环
+* @param	: jump_state_disance
+* @retval   : void
+* @Note     : jump_state_disance记录跳跃状态
+************************************************************************************************************************
+**/
+float estimated_chassis_yaw = 0.0f;    // 估算的底盘yaw角度
+float prev_gimbal_yaw = 0.0f;          // 上一时刻云台yaw角度
+float filtered_dist_error = 0.0f;      // 滤波后的测距误差
+float prev_dist_left=0.0f,prev_dist_right=0.0f,max_dist_jump=0.05;
+u8 trust_dist;
+void yaw_control_update(float mea_distance_left,float mea_distance_right)
+{
+    // ---------- 1. 测距信任判断 ----------////
+    float dl_jump = fabsf(mea_distance_left - prev_dist_left);
+    float dr_jump = fabsf(mea_distance_right - prev_dist_right);
+    float mean_dist = (mea_distance_left + mea_distance_right) / 2.0f;
+    if (dl_jump > max_dist_jump || dr_jump > max_dist_jump) {
+        trust_dist = 0;  // 如果差异过大，不信任测距数据
+    } else {
+        trust_dist = 1;   // 测距数据正常，信任
+    }
+    prev_dist_left = mea_distance_left;
+    prev_dist_right = mea_distance_right;
+
+
+    float raw_dist_error = (mea_distance_left-mean_dist) - (mea_distance_right-mean_dist);
+    filtered_dist_error = 0.92 * filtered_dist_error +
+                          0.08 * raw_dist_error;
+    float vw_from_dist = pid_calc(&b_chassis.pid_yaw_dist, filtered_dist_error, 0);
+    float final_vw_ref = 0.0f;
+    if (trust_dist) {
+        final_vw_ref = 0.6f * vw_from_dist + 0.4f *  -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);
+    } else {
+        final_vw_ref = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);  //这里不使用remoteangle，因为测距在前面
+    }
+
+
+    b_chassis.chassis_ref.vw = final_vw_ref;
+
+}
+u8    jump_state_disance = 0;
+
+
+void balance_jump_distance_yaw_handle(void)
+{
+   // yaw_control_update(mea_distance_left,mea_distance_right);
+
+    //b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);  //这里不使用remoteangle，因为测距在前面
+
+
+    b_chassis.chassis_ref.vx = 0; // 将在X轴方向上的线速度和绕Z轴的角速度初始化为0。
+    init_finish_flag=0;
+
+    if (jump_state_disance == 0)
+    {
+
+        jump_feedfront = 0;
+        b_chassis.chassis_ref.leglength = 0.15f; // 设置腿长
+
+
+        if (fabs(b_chassis.balance_loop.dx) > 0.5
+                ||b_chassis.chassis_ref.vy != 0
+                ||fabs(b_chassis.chassis_ref.vw) >= 3.0
+                ||usart_chassis_data.ctrl_mode==1)// 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+        {
+            b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+        } // 位置等于x，err为0
+        else
+        {
+
+            b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0003 * TIME_STEP;
+
+        } // 否则加上err补偿
+        if(fabs(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi)<PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi > 3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle-2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi < -3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle+2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        }
+        else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi>0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle - PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi<0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle + PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        }
+
+        b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy,ecd_speed);
+
+        VAL_LIMIT(b_chassis.chassis_ref.vy, -1.5, 1.5);//-1.4, 1.4  mea_distance<0.48
+        if (mea_distance<0.49)//mea_distance<0.48
+        {
+            jump_state_disance++;
+        }
+    }
+    else if (jump_state_disance == 1)
+    {
+        jump_vm_flag=1;
+        jump_feedfront = 230;                                                                               // 前馈
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                                             // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                                      // 位置，直接等于x，err等于0
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 860, 0, 0);
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 120, 0, 0);    //气弹簧参数    700, 0, 0    70, 0, 0  410, 0, 0 55, 0, 0
+
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 870, 0, 0);
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 110, 0, 0);
+
+        b_chassis.chassis_ref.leglength = 0.37f;                                                          // 腿长为0.38
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+            jump_state_disance++;                                                                                 // 跳跃状态+1
+    }
+    else if (jump_state_disance == 2)
+    {
+        jump_feedfront = 0; // 前馈
+
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                          // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                   // 位置，直接等于x，err等于0
+
+        b_chassis.chassis_ref.leglength = 0.14f;                                       // 腿长
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+        {
+            // 初始化左腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 20);
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+            /***************************************************************************************************/
+            // 初始化右腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 20);
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);  //25 0 7
+            jump_state_disance = 0;                                                                                   // 跳跃状态标志位归零
+            b_chassis.jump_flag = 0;                                                                          // 跳跃任务标志位为0
+            if_middle_leg = 1;
+            // 中间腿标志位为1
+        }
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_jump_double_handle
+* @brief    : 跳跃任务测试版-连续跳跃
+* @param	: jump_state_double
+* @retval   : void
+* @Note     : jump_state_double记录跳跃状态
+************************************************************************************************************************
+**/
+u8    jump_state_double = 0;
+uint16_t jump_cnt;
+void balance_jump_double_handle(void)
+{
+    b_chassis.chassis_ref.vx = 0; // 将在X轴方向上的线速度和绕Z轴的角速度初始化为0。
+    b_chassis.chassis_ref.vw = 0;
+    init_finish_flag=0;
+    if (jump_state_double == 0)
+    {
+
+        jump_feedfront = 0;
+        b_chassis.chassis_ref.leglength = 0.15f; // 设置腿长
+
+
+        if (fabs(b_chassis.balance_loop.dx) > 0.5
+                ||b_chassis.chassis_ref.vy != 0
+                ||fabs(b_chassis.chassis_ref.vw) >= 3.0
+                ||usart_chassis_data.ctrl_mode==1)// 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+        {
+            b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+        } // 位置等于x，err为0
+        else
+        {
+
+            b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0003 * TIME_STEP;
+
+        } // 否则加上err补偿
+        if(fabs(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi)<PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi > 3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle-2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi < -3*PI/2)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle+2*PI;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        }
+        else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi>0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle - PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi<0)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle + PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        }
+
+        b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy,ecd_speed);
+
+        VAL_LIMIT(b_chassis.chassis_ref.vy, -1.5, 1.5);//-1.4, 1.4  mea_distance<0.48
+
+        b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);  //这里不使用remoteangle，因为测距在前面
+
+        if (mea_distance<0.49)//mea_distance<0.48
+        {
+            jump_state_double++;
+        }
+    }
+    else if (jump_state_double == 1)
+    {
+        jump_vm_flag=1;
+        jump_feedfront = 230;                                                                               // 前馈
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                                             // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                                      // 位置，直接等于x，err等于0
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 860, 0, 0);
+        PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 120, 0, 0);    //气弹簧参数    700, 0, 0    70, 0, 0  410, 0, 0 55, 0, 0
+
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 870, 0, 0);
+        PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 20000, 20000, 110, 0, 0);
+
+        b_chassis.chassis_ref.leglength = 0.37f;                                                          // 腿长为0.38
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+            jump_state_double++;                                                                                 // 跳跃状态+1
+    }
+    else if (jump_state_double == 2)
+    {
+        jump_feedfront = 0; // 前馈
+
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                          // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                   // 位置，直接等于x，err等于0
+
+        b_chassis.chassis_ref.leglength = 0.14f;                                       // 腿长
+        if((fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+        {
+
+
+            jump_state_double++;
+
+        }
+    }
+    else if(jump_state_double==3)
+    {
+        jump_feedfront = 230; // 前馈
+
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                          // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                   // 位置，直接等于x，err等于0
+
+        b_chassis.chassis_ref.leglength = 0.32f;                                       // 腿长
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+        {
+            jump_state_double++;
+
+        }
+    }
+    else if(jump_state_double==4)
+    {
+        jump_feedfront = 0; // 前馈
+
+        b_chassis.chassis_ref.vy = b_chassis.balance_loop.dx;                          // x轴方向的速度
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;                   // 位置，直接等于x，err等于0
+
+        b_chassis.chassis_ref.leglength = 0.15f;                                       // 腿长
+        if( (fabs(b_chassis.left_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)||(fabs(b_chassis.right_leg.l0 - b_chassis.chassis_ref.leglength) <= 0.01)) // 如果腿长误差小于0.01
+        {
+            // 初始化左腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 20);
+            PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+            /***************************************************************************************************/
+            // 初始化右腿的长度PID参数  50 0 700
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 20);
+            PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 30, 0, 0);  //25 0 7
+            jump_state_double = 0;                                                                                   // 跳跃状态标志位归零
+            b_chassis.jump_flag = 0;                                                                          // 跳跃任务标志位为0
+            // if_middle_leg = 1;
+            // 中间腿标志位为1
+
+        }
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_over_slope_handle
+* @brief    : 飞坡模式
+* @param	:
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+uint16_t over_slope_leglenth_cnt;
+void balance_over_slope_handle(void)
+{
+    // 初始化左腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 5000, 20000, 25, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+    /***************************************************************************************************/
+    // 初始化右腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 5000, 20000, 25,  0, 0);  //25 0 7
+
+    if(over_slope_state==0)
+    {
+        b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;
+        if(fabs(b_chassis.balance_loop.L0 - b_chassis.chassis_ref.leglength)<0.02)
+            over_slope_state++;
+    }
+    else
+    {
+        if (b_chassis.balance_loop.L0<0.165)
+        {
+            b_chassis.chassis_ref.leglength = 0.15;
+            over_slope_leglenth_cnt++;
+            if(over_slope_leglenth_cnt>2500)
+            {
+                over_slope_state=0;
+                over_slope_leglenth_cnt=0;
+            }
+        }
+        else
+        {
+            b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;
+
+        }
+    }
+    if (fabs(b_chassis.balance_loop.dx) > 0.5
+            ||b_chassis.chassis_ref.vy != 0
+            ||fabs(b_chassis.chassis_ref.vw) >= 3.0
+            ||usart_chassis_data.ctrl_mode==1) // 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+    {
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+    } // 位置等于x，err为0
+    else
+    {
+        b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0003 * TIME_STEP;
+
+    } // 否则加上err补偿
+    if(fabs(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi)<PI/2)
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi > 3*PI/2)
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle-2*PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi < -3*PI/2)
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle+2*PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi>0)
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+    } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi<0)
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+    }
+
+    b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy,ecd_speed);
+    VAL_LIMIT(b_chassis.chassis_ref.vy, -2.0, 2.0);//1.9 1.8
+    b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);
+
+    if(b_chassis.rotate_flag==1)
+    {
+        if(fabs(chassis_gyro.yaw_Gyro * PI / 180.0f) >= 0.5)
+        {
+            b_chassis.chassis_ref.vy =0;
+        }
+        else
+        {
+            b_chassis.rotate_flag=0;
+        }
+    }
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_step_handle
+* @brief    : 上台阶模式
+* @param	: step_state
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+uint8_t step_state=0,step_flag=0;
+uint16_t step_state_cnt=0;
+uint8_t leg_state=0;
+float phi0,remain_phi0_right,ref_phi0_left,ref_phi0_right,ref_leglenth_left,ref_leglenth_right;
+void balance_step_handle(void)
+{
+//    // 初始化左腿的长度PID参数  50 0 700
+//    PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+//    PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 25, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0 ， 95, 0, 50
+
+//    /***************************************************************************************************/
+//    // 初始化右腿的长度PID参数  50 0 700
+//    PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 85, 0, 10);
+//    PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 3000, 20000, 25,  0, 0);  //25 0 7
+
+//    b_chassis.chassis_ref.vx = 0; // 将在X轴方向上的线速度和绕Z轴的角速度初始化为0。
+//    b_chassis.chassis_ref.vw = 0;
+
+//    if(step_state==0)//站立
+//    {
+//        balance_task();
+//        float phi0_0_2pi_left =transform_angle_0_2pi(b_chassis.left_leg.phi0-1.57f);
+//        float phi0_0_2pi_right=transform_angle_0_2pi(b_chassis.right_leg.phi0-1.57f);
+
+//        b_chassis.chassis_ref.leglength = 0.36f;
+
+//        if (fabs(b_chassis.balance_loop.dx) > 0.5
+//                ||b_chassis.chassis_ref.vy != 0
+//                ||fabs(b_chassis.chassis_ref.vw) >= 3.0
+//                ||usart_chassis_data.ctrl_mode==1)// 如果速度大于0.5或者底盘参考速度不为0或者串口控制模式为1或者底盘参考速度的绝对值大于0.2
+//        {
+//            b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+//        } // 位置等于x，err为0
+//        else
+//        {
+//            b_chassis.normal_Y_erroffset -= b_chassis.balance_loop.dx * 0.0003 * TIME_STEP;
+
+//        } // 否则加上err补偿
+//        if(fabs(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi)<PI/2)
+//        {
+//            target_angle = b_chassis.chassis_ref.remote_angle;
+//            ecd_speed = b_chassis.chassis_ref.remote_speed;
+//            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+//        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi > 3*PI/2)
+//        {
+//            target_angle = b_chassis.chassis_ref.remote_angle-2*PI;
+//            ecd_speed = b_chassis.chassis_ref.remote_speed;
+//            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+//        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi < -3*PI/2)
+//        {
+//            target_angle = b_chassis.chassis_ref.remote_angle+2*PI;
+//            ecd_speed = b_chassis.chassis_ref.remote_speed;
+//            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+//        }
+//        else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi>0)
+//        {
+//            target_angle = b_chassis.chassis_ref.remote_angle - PI;
+//            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+//            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+//        } else if(b_chassis.chassis_ref.remote_angle-b_chassis.yaw_angle__pi_pi<0)
+//        {
+//            target_angle = b_chassis.chassis_ref.remote_angle + PI;
+//            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+//            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+//        }
+//        b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy,ecd_speed);
+
+//        VAL_LIMIT(b_chassis.chassis_ref.vy, -1.0, 1.0);//-1.4, 1.4  mea_distance<0.48
+
+//        b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_follow_gim,b_chassis.yaw_angle__pi_pi,0);
+
+//        if(b_chassis.balance_loop.theta>0.5)
+//        {
+//            remain_phi0_right=phi0_0_2pi_right;
+
+//            step_state_cnt++;
+
+//            if(step_state_cnt>500)
+//            {
+//                step_state++;
+//            }
+//        }
+//    }
+//    else if(step_state==1)//左腿先起，右腿再起
+//    {
+
+
+//        VMC_data_get(&b_chassis.left_leg, balance_chassis.joint_Encoder[2].angle * JM2_POLARITY,
+//                     balance_chassis.joint_Encoder[2].gyro * JM2_POLARITY,
+//                     balance_chassis.joint_Encoder[1].angle * JM3_POLARITY + PI,
+//                     balance_chassis.joint_Encoder[1].gyro * JM3_POLARITY);
+
+//        VMC_data_get(&b_chassis.right_leg, balance_chassis.joint_Encoder[3].angle * JM1_POLARITY,
+//                     balance_chassis.joint_Encoder[3].gyro * JM1_POLARITY,
+//                     balance_chassis.joint_Encoder[0].angle * JM4_POLARITY + PI,
+//                     balance_chassis.joint_Encoder[0].gyro * JM4_POLARITY);
+//        phi0 = ((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f; // 计算Phi0
+
+//        float phi0_0_2pi_left =transform_angle_0_2pi(b_chassis.left_leg.phi0-1.57f);
+//        float phi0_0_2pi_right=transform_angle_0_2pi(b_chassis.right_leg.phi0-1.57f);
+//        //   float phi0_0_2pi = (phi0_0_2pi_left+phi0_0_2pi_right)/2.0f;
+
+//        b_chassis.balance_loop.theta = ((((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f) - chassis_gyro.pitch_Angle * PI / 180.0f);
+//        if(leg_state==0)
+//        {
+
+//            ref_leglenth_left=0.36;
+//            ref_leglenth_right=0.36;
+//            ref_phi0_right=remain_phi0_right;
+//            ref_phi0_left=2.0;
+//            if(fabs(phi0_0_2pi_left-ref_phi0_left)<0.02)
+//            {
+//                leg_state=1;
+//            }
+//        }
+//        else if(leg_state==1)
+//        {
+//            ref_leglenth_left=0.14;
+//            ref_leglenth_right=0.36;
+//            ref_phi0_right=remain_phi0_right;
+//            ref_phi0_left=0.86;
+
+//            if(fabs(phi0_0_2pi_left-ref_phi0_left)<0.02)
+//            {
+//                leg_state=2;
+//            }
+//        }
+//        else if(leg_state==2)
+//        {
+
+//            ref_leglenth_left=0.14;
+//            ref_leglenth_right=0.36;
+//            ref_phi0_right=2.0;
+//            ref_phi0_left=0.86;
+//            if(fabs(phi0_0_2pi_right-ref_phi0_right)<0.02)
+//            {
+//                leg_state=3;
+//            }
+//        }
+//        else if(leg_state==3)
+//        {
+//            ref_leglenth_left=0.14;
+//            ref_leglenth_right=0.14;
+//            ref_phi0_right=0.86;
+//            ref_phi0_left=0.86;
+
+
+//        }
+
+//        float Init_Tp_phi0_left =pid_calc(&b_chassis.over_step_phi0_left_pid, phi0_0_2pi_left, ref_phi0_left);
+
+//        float Init_Tp_phi0_right=pid_calc(&b_chassis.over_step_phi0_right_pid, phi0_0_2pi_right,ref_phi0_right);
+
+
+//        // 腿部竖直力F的计算
+//        b_chassis.left_leg.leg_length_outer = pid_calc(&b_chassis.left_leg.leglengthpid_outer, b_chassis.left_leg.l0, ref_leglenth_left);
+//        b_chassis.left_leg.leg_F = pid_calc(&b_chassis.left_leg.leglengthpid_inner, b_chassis.left_leg.dl0, b_chassis.left_leg.leg_length_outer);
+
+//        b_chassis.right_leg.leg_length_outer = pid_calc(&b_chassis.right_leg.leglengthpid_outer, b_chassis.right_leg.l0, ref_leglenth_right);
+//        b_chassis.right_leg.leg_F = pid_calc(&b_chassis.right_leg.leglengthpid_inner, b_chassis.right_leg.dl0, b_chassis.right_leg.leg_length_outer);
+
+//        leg_conv(b_chassis.left_leg.leg_F, (Init_Tp_phi0_left ) / 2.0f, b_chassis.left_leg.phi1, b_chassis.left_leg.phi4, b_chassis.left_leg.T);
+//        leg_conv(b_chassis.right_leg.leg_F, (Init_Tp_phi0_right ) / 2.0f, b_chassis.right_leg.phi1, b_chassis.right_leg.phi4, b_chassis.right_leg.T);
+
+
+//        motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],0,0);
+
+//    }
+//    limit_outer();
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_down_run_handle
+* @brief    : 倒地模式
+* @param	: down_flag
+* @retval   : void
+* @Note     : //腿部姿态到位 ->保持腿部姿态（保证轮子接触地面，摩擦力）->前进后退，转弯（最后加）
+              要有双腿协调
+************************************************************************************************************************
+**/
+float Driving_t_l=0,Driving_t_r=0;
+u8 down_run_finish_flag;
+void balance_down_run_handle(void)
+{
+    down_run_finish_flag=0;
+    PID_struct_init(&b_chassis.Init_Tp_pid, POSITION_PID, 400, 200, 68, 0, 0);      // 初始化初始化Tp的PID//500, 200, 40, 0, 60    200
+    // 初始化左腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 0);
+    PID_struct_init(&b_chassis.left_leg.leglengthpid_outer, POSITION_PID, 10000, 20000, 30, 0, 0);    //气弹簧参数 85, 0, 10  25, 0, 0
+
+    /***************************************************************************************************/
+    // 初始化右腿的长度PID参数  50 0 700
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_inner, POSITION_PID, 20000, 20000, 80, 0, 0);
+    PID_struct_init(&b_chassis.right_leg.leglengthpid_outer, POSITION_PID, 10000, 20000, 30, 0, 0);  //25 0 7
+
+    VMC_data_get(&b_chassis.left_leg, balance_chassis.joint_Encoder[2].angle * JM2_POLARITY+2.18*PI/180.0f,
+                 balance_chassis.joint_Encoder[2].gyro * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[1].angle * JM3_POLARITY + PI-2.18*PI/180.0f,
+                 balance_chassis.joint_Encoder[1].gyro * JM3_POLARITY);
+
+    VMC_data_get(&b_chassis.right_leg, balance_chassis.joint_Encoder[3].angle * JM1_POLARITY+2.18*PI/180.0f,
+                 balance_chassis.joint_Encoder[3].gyro * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[0].angle * JM4_POLARITY + PI-2.18*PI/180.0f,
+                 balance_chassis.joint_Encoder[0].gyro * JM4_POLARITY);
+
+    float left_leg_phi1 = normalize_angle_pi(b_chassis.left_leg.phi1);
+    float right_leg_phi1 = normalize_angle_pi(b_chassis.right_leg.phi1);
+    float phi0 = ((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f; // 计算Phi0
+    b_chassis.balance_loop.theta = ((((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f) - chassis_gyro.pitch_Angle * PI / 180.0f);
+    float Init_Tp = pid_calc(&b_chassis.Init_Tp_pid, phi0, 0.87);
+    // 双腿协调pid
+    float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+    float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+    init_tp_calc(0.16f,harmonize_inner,Init_Tp);
+
+    if (fabs(b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi) < PI / 2) // 如果云台角度与底盘偏航角差值小于PI/2,在同一象限内
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 3 * PI / 2) // 如果云台角度与底盘偏航角差值大于3*PI/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll =  usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < -3 * PI / 2) // 如果差值的绝对值小于-3π/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 0) // 如果差值的绝对值大于0
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll =  -usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < 0) // 如果差值的绝对值小于0
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + PI;
+        ecd_speed = -b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+    }
+    b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy, ecd_speed); // 将当前值调整到参考值
+    b_chassis.chassis_ref.vw = - pid_calc(&b_chassis.pid_follow_gim, b_chassis.yaw_angle__pi_pi, target_angle);
+    b_chassis.balance_loop.dx = Mileage_kalman_filter.velocity; //
+
+    vw_torque = pid_calc(&b_chassis.vw_pid, chassis_gyro.yaw_Gyro * PI / 180.0f, b_chassis.chassis_ref.vw);
+    b_chassis.vw_limit_rate = 0.8;
+    b_chassis.balance_loop.state_err[3] = b_chassis.chassis_ref.vy - b_chassis.balance_loop.dx;
+    b_chassis.balance_loop.lqrOutT=b_chassis.balance_loop.state_err[3]*2;
+    Driving_t_l = (b_chassis.balance_loop.lqrOutT / 2.0f + vw_torque * b_chassis.vw_limit_rate / 2.0f) * LEFT_WHEEL_POLARITY;
+    Driving_t_r = (b_chassis.balance_loop.lqrOutT / 2.0f - vw_torque * b_chassis.vw_limit_rate / 2.0f) * RIGHT_WHEEL_POLARITY;
+
+    motor_torque_set(JM1_POLARITY * b_chassis.right_leg.T[0],JM2_POLARITY * b_chassis.left_leg.T[0],JM3_POLARITY * b_chassis.left_leg.T[1],JM4_POLARITY * b_chassis.right_leg.T[1],Driving_t_l,Driving_t_r);
+
+    // 电机输出限幅
+    limit_outer();
+
+}
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_stop_handle
+* @brief    : 停止模式，大幅用
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+void chassis_stop_handle(void)
+{
+    b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;        // 将底盘的动态参考腿长赋值给底盘的参考腿长
+    b_chassis.chassis_ref.vy = 0;                                                     // 设置底盘的参考速度为零 y轴方向速度
+    b_chassis.chassis_ref.vx = 0;                                                     // x轴方向速度
+    b_chassis.chassis_ref.vw = 0;                                                     // 设置底盘的参考角速度为零
+    b_chassis.chassis_ref.y_position += b_chassis.chassis_ref.vy * 0.0001 * TIME_STEP; // 设置底盘的参考位置为零, y轴位置增加量 = y轴方向速度 * 时间步长（0.001秒） * 时间步长常量
+}
+
+/**
+************************************************************************************************************************
+* @Name     : chassis_side_handle
+* @brief    : 侧向对敌
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+void chassis_side_handle(void)
+{
+    PID_struct_init(&b_chassis.roll_pid_angle, POSITION_PID, 1, 1, 0.008, 0, 0.01); //// 初始化roll轴滚角的PID参数  0.012, 0.00002, 0.02  30  2.2, 0, 1
+    PID_struct_init(&b_chassis.roll_leg_F_Rotate_pid, POSITION_PID, 20, 10, 2, 0, 1);
+
+    PID_struct_init(&b_chassis.pid_follow_gim,POSITION_PID,6, 200, 8, 0, 1);// 初始化跟随云台的PID
+
+    b_chassis.chassis_ref.vx = b_chassis.chassis_dynemic_ref.vx;
+    if (fabs(b_chassis.balance_loop.dx) > 0.5
+            ||b_chassis.chassis_ref.vy != 0
+            ||fabs(b_chassis.chassis_ref.vw) >= 1.7
+            ||usart_chassis_data.ctrl_mode==1)
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+    else
+        b_chassis.normal_Y_erroffset-=b_chassis.balance_loop.dx*0.0003*TIME_STEP;
+
+    if (fabs(b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi) < PI / 3) // 如果云台角度与底盘偏航角差值小于PI/2,在同一象限内
+    {
+        if(fabs(b_chassis.chassis_ref.remote_angle-PI/2)<PI/8)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle-PI/4;
+            ecd_speed = b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+        }
+        else
+        {
+            if(fabs(b_chassis.chassis_ref.remote_angle+PI/2)<PI/8)
+            {
+                target_angle = b_chassis.chassis_ref.remote_angle+PI/4;
+                ecd_speed = b_chassis.chassis_ref.remote_speed;
+                b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+            }
+            else
+            {
+                target_angle = b_chassis.chassis_ref.remote_angle;
+                ecd_speed = b_chassis.chassis_ref.remote_speed;
+                b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+            }
+        }
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 3 * PI / 2) // 如果云台角度与底盘偏航角差值大于3*PI/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle - 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll =  usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < -3 * PI / 2) // 如果差值的绝对值小于-3π/2
+    {
+        target_angle = b_chassis.chassis_ref.remote_angle + 2 * PI;
+        ecd_speed = b_chassis.chassis_ref.remote_speed;
+        b_chassis.chassis_ref.roll = usart_chassis_data.roll;
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi > 0) // 如果差值的绝对值大于0
+    {
+        if(fabs(b_chassis.chassis_ref.remote_angle-PI/2)<PI/8)
+        {
+            target_angle =  -b_chassis.chassis_ref.remote_angle +PI/4;
+            ecd_speed =  -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll =  -usart_chassis_data.roll;
+        }
+        else
+        {
+            target_angle =  -b_chassis.chassis_ref.remote_angle;
+            ecd_speed =  -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll =  -usart_chassis_data.roll;
+        }
+    }
+    else if (b_chassis.chassis_ref.remote_angle - b_chassis.yaw_angle__pi_pi < 0) // 如果差值的绝对值小于0
+    {
+        if(fabs(b_chassis.chassis_ref.remote_angle + PI/2)<PI/8)
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle + 3*PI/4;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        }
+        else
+        {
+            target_angle = b_chassis.chassis_ref.remote_angle + PI;
+            ecd_speed = -b_chassis.chassis_ref.remote_speed;
+            b_chassis.chassis_ref.roll = -usart_chassis_data.roll;
+        }
+    }
+    b_chassis.chassis_ref.vy = trackRamp(b_chassis.chassis_ref.vy, ecd_speed); // 将当前值调整到参考值
+    b_chassis.chassis_ref.vw = -pid_calc(&b_chassis.pid_chassis_side,b_chassis.yaw_angle__pi_pi,target_angle);
+ 
+    b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;
+	
+    if(b_chassis.rotate_flag==1)
+    {
+        if(fabs(chassis_gyro.yaw_Gyro * PI / 180.0f) >= 0.5)
+        {
+            b_chassis.chassis_ref.vy =0;
+        }
+        else
+        {
+            b_chassis.rotate_flag=0;
+        }
+    }
+    VAL_LIMIT(b_chassis.chassis_ref.vy,-1.5,1.5);
+}
+/**
+************************************************************************************************************************
+* @Name     : chassis_seperate_handle
+* @brief    : 单个底盘模式，测试用
+* @param		: void
+* @retval   : void
+* @Note     :
+************************************************************************************************************************
+**/
+float sep_target_yaw;
+void chassis_seperate_handle(void)
+{
+    if (seperate_cnt == 0) // 如果分离计数器为0
+    {
+        seperate_cnt++;                          // 计数
+        sep_target_yaw = chassis_gyro.yaw_Angle; // 设置分离目标偏航角为底盘陀螺仪的偏航角
+    }
+    b_chassis.chassis_ref.vy = 0;   // 设置底盘参考速度的纵向分量为0
+    b_chassis.chassis_ref.roll = 0; // 设置底盘参考姿态的滚动分量为0
+    // 计算底盘旋转速度，使用PID控制器
+    b_chassis.chassis_ref.vw = pid_calc(&b_chassis.pid_seperate_gim, chassis_gyro.yaw_Angle, sep_target_yaw);
+    VAL_LIMIT(b_chassis.chassis_ref.vw, -5, 5); // 限幅 -5到5
+    b_chassis.chassis_ref.leglength = b_chassis.chassis_dynemic_ref.leglength;
+
+}
+
+/**
+************************************************************************************************************************
+* @Name     : balance_task
+* @brief    : 平衡底盘解算
+* @param		: void
+* @retval   : void
+* @Note     :	一定要注意弧度制的转化啊
+                            电机极性要仔细检查
+                            检查好各个传感器的单位与性能
+************************************************************************************************************************
+**/
+float rotato_offset=0,rotato_offset_kp=0;
+float current_fm=0,final_yaw_gyro=0;
+float ecd_dtheta = 0,final_dtheta = 0,current_fm_left,current_fm_right;
+// 最长到0.35，其实能到0.38
+float Tp_k=2.0f;//3.0f
+float right_leg_F_antifeedforward =18.0f;//28.0f;
+
+
+void balance_task(void)
+{
+    VMC_data_get(&b_chassis.left_leg, balance_chassis.joint_Encoder[2].angle * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[2].gyro * JM2_POLARITY,
+                 balance_chassis.joint_Encoder[1].angle * JM3_POLARITY + PI,
+                 balance_chassis.joint_Encoder[1].gyro * JM3_POLARITY);
+
+    VMC_data_get(&b_chassis.right_leg, balance_chassis.joint_Encoder[3].angle * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[3].gyro * JM1_POLARITY,
+                 balance_chassis.joint_Encoder[0].angle * JM4_POLARITY + PI,
+                 balance_chassis.joint_Encoder[0].gyro * JM4_POLARITY);
+
+    float phi0 = ((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f; // 计算Phi0
+
+    ecd_dtheta = (((b_chassis.left_leg.dphi0 + b_chassis.right_leg.dphi0) / 2.0f) - chassis_gyro.pitch_Gyro * PI / 180.0f);
+    if (isnan(ecd_dtheta) || isinf(ecd_dtheta))
+    {
+        ecd_dtheta = 0.0f; // 设置为一个合理的默认值
+    }
+    final_dtheta = Lpf_1st_calcu(&TEST_LPF, ecd_dtheta, 5, 0.002);
+
+		if(b_chassis.ctrl_mode==CHASSIS_ROTATE)
+        b_chassis.balance_loop.phi = (chassis_gyro.pitch_Angle+0.5f) * PI / 180.0f;
+		else
+	    b_chassis.balance_loop.phi = chassis_gyro.pitch_Angle * PI / 180.0f;
+		
+    b_chassis.balance_loop.dphi = chassis_gyro.pitch_Gyro * PI / 180.0f;
+    b_chassis.balance_loop.x = ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].angle + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].angle) / 2.0f) * WHEEL_R;
+    b_chassis.balance_loop.dx = Mileage_kalman_filter.velocity; //
+    b_chassis.balance_loop.theta = ((((b_chassis.left_leg.phi0 + b_chassis.right_leg.phi0) / 2.0f) - 1.57f) - chassis_gyro.pitch_Angle * PI / 180.0f);
+    b_chassis.balance_loop.dtheta = ecd_dtheta;
+    b_chassis.theta_left  = b_chassis.left_leg.phi0  - 1.57f - chassis_gyro.pitch_Angle * PI / 180.0f;
+    b_chassis.theta_right = b_chassis.right_leg.phi0  - 1.57f - chassis_gyro.pitch_Angle * PI / 180.0f;
+
+
+
+    b_chassis.balance_loop.ddz = chassis_gyro.z_Acc * cos(chassis_gyro.pitch_Angle * PI / 180.0f);
+    // 底盘轮子的平均线速度变化=平均角速度乘以半径
+    b_chassis.balance_loop.wheel_dx = ((LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].gyro + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].gyro) / 2.0f) * WHEEL_R;
+    // 底盘轮子的平均转速（RPM，即每分钟转数)
+    b_chassis.balance_loop.RPM = (LEFT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[0].rate_rpm / REDUCTION_RATIO_13 + RIGHT_WHEEL_POLARITY * balance_chassis.Driving_Encoder[1].rate_rpm / REDUCTION_RATIO_13) / 2.0;
+    // 腿长平均值
+    b_chassis.balance_loop.L0 = (b_chassis.left_leg.l0 + b_chassis.right_leg.l0) / 2.0f;
+    //向心力
+    b_chassis.balance_loop.Fm = b_chassis.chassis_ref.vw * b_chassis.chassis_ref.vy * BODY_MASS;
+    //实际向心力
+    final_yaw_gyro = final_yaw_gyro* 0.98f + chassis_gyro.yaw_Gyro  * 0.02f;
+    current_fm     = chassis_gyro.yaw_Gyro * PI / 180.0f*Mileage_kalman_filter.velocity*21.0;
+
+    // 计算支持力
+    FN_calculate(&b_chassis.left_leg,  JM3_POLARITY * balance_chassis.joint_Encoder[1].Torque, JM2_POLARITY * balance_chassis.joint_Encoder[2].Torque, &L_DDZW_LPF);  // capacitance_message.out_power
+    FN_calculate(&b_chassis.right_leg, JM4_POLARITY * balance_chassis.joint_Encoder[0].Torque, JM1_POLARITY * balance_chassis.joint_Encoder[3].Torque, &R_DDZW_LPF); // balance_chassis.Driving_Encoder[0].rate_rpm
+
+    // lqr参数根据腿长的变化获取
+    lqr_k(b_chassis.balance_loop.L0, b_chassis.balance_loop.K);
+    for (int i = 0; i < 6; i++)
+    {
+        for (int j = 0; j < 2; j++)
+        {
+
+            b_chassis.balance_loop.k[j][i] = b_chassis.balance_loop.K[i * 2 + j];
+        }
+    }
+
+    /********************************平衡部分解算********************************/
+    if(if_middle_leg==1)
+    {
+        b_chassis.balance_loop.state_err[0] = -0.04- b_chassis.balance_loop.theta;
+    }
+    else
+        b_chassis.balance_loop.state_err[0] = 0 - b_chassis.balance_loop.theta;
+
+    if(jump_state==0&&b_chassis.jump_flag==1)
+    {
+        b_chassis.chassis_ref.pitch=-0.05f;
+    }
+    else
+        b_chassis.chassis_ref.pitch=0;
+
+    b_chassis.balance_loop.state_err[1] = 0 - b_chassis.balance_loop.dtheta;
+    b_chassis.balance_loop.state_err[2] = b_chassis.chassis_ref.y_position - b_chassis.balance_loop.x;
+    b_chassis.balance_loop.state_err[3] = b_chassis.chassis_ref.vy - b_chassis.balance_loop.dx;
+    b_chassis.balance_loop.state_err[4] = b_chassis.chassis_ref.pitch - b_chassis.balance_loop.phi;
+	
+	
+    b_chassis.balance_loop.state_err[5] = 0 - b_chassis.balance_loop.dphi;
+
+    float x_err;
+    if (jump_state >= 1)
+    {
+        x_err = 0;
+    }
+    else
+        x_err = (b_chassis.balance_loop.state_err[2] + b_chassis.normal_Y_erroffset);
+    // 对腿变化加速度的限制
+    if (b_chassis.ctrl_mode == CHASSIS_ROTATE) // 如果是小陀螺模式
+    {
+        b_chassis.balance_loop.state_err[3] = 0; // 速度误差为0
+    }
+    else
+    {   // 否则如果速度等于最大速度
+        if (fabs(b_chassis.chassis_dynemic_ref.vy) == b_chassis.max_speed)
+        {
+            VAL_LIMIT(b_chassis.balance_loop.state_err[3], -1.5, 1.5); // 速度误差限幅为-1.5,1.5     //1.9
+        }
+        else
+        {
+            VAL_LIMIT(b_chassis.balance_loop.state_err[3], -1.8,1.8);   // 如果不相等限幅为-1.8,1.8  //1.5
+        }
+    }
+    // 平衡部分未离地力矩增益计算
+    b_chassis.balance_loop.K_error[0][0] = b_chassis.balance_loop.k[0][0] * b_chassis.balance_loop.state_err[0];
+    b_chassis.balance_loop.K_error[0][1] = b_chassis.balance_loop.k[0][1] * b_chassis.balance_loop.state_err[1];
+    b_chassis.balance_loop.K_error[0][2] = b_chassis.balance_loop.k[0][2] * b_chassis.balance_loop.state_err[2];
+    b_chassis.balance_loop.K_error[0][3] = b_chassis.balance_loop.k[0][3] * b_chassis.balance_loop.state_err[3];
+    b_chassis.balance_loop.K_error[0][4] = b_chassis.balance_loop.k[0][4] * b_chassis.balance_loop.state_err[4];
+    b_chassis.balance_loop.K_error[0][5] = b_chassis.balance_loop.k[0][5] * b_chassis.balance_loop.state_err[5];
+
+    b_chassis.balance_loop.K_error[1][0] = b_chassis.balance_loop.k[1][0] * b_chassis.balance_loop.state_err[0];
+    b_chassis.balance_loop.K_error[2][1] = b_chassis.balance_loop.k[1][1] * b_chassis.balance_loop.state_err[1];
+    b_chassis.balance_loop.K_error[1][2] = b_chassis.balance_loop.k[1][2] * b_chassis.balance_loop.state_err[2];
+    b_chassis.balance_loop.K_error[1][3] = b_chassis.balance_loop.k[1][3] * b_chassis.balance_loop.state_err[3];
+    b_chassis.balance_loop.K_error[1][4] = b_chassis.balance_loop.k[1][4] * b_chassis.balance_loop.state_err[4];
+    b_chassis.balance_loop.K_error[1][5] = b_chassis.balance_loop.k[1][5] * b_chassis.balance_loop.state_err[5];
+    float speed_k;
+    if(fabs(left_acc)>310||fabs(right_acc)>310)
+    {
+        speed_k=0;
+    }
+    else
+    {
+        speed_k=b_chassis.balance_loop.k[0][3] * b_chassis.balance_loop.state_err[3];
+    }
+    balance_Tgain = b_chassis.balance_loop.k[0][0] * b_chassis.balance_loop.state_err[0] +
+                    b_chassis.balance_loop.k[0][1] * b_chassis.balance_loop.state_err[1] +
+                    b_chassis.balance_loop.k[0][2] * x_err +
+                    speed_k                                                              +
+                    b_chassis.balance_loop.k[0][4] * b_chassis.balance_loop.state_err[4] +
+                    b_chassis.balance_loop.k[0][5] * b_chassis.balance_loop.state_err[5];
+
+    balance_Tpgain = b_chassis.balance_loop.k[1][0] * b_chassis.balance_loop.state_err[0] +
+                     b_chassis.balance_loop.k[1][1] * b_chassis.balance_loop.state_err[1] +
+                     b_chassis.balance_loop.k[1][2] * x_err +
+                     b_chassis.balance_loop.k[1][3] * b_chassis.balance_loop.state_err[3] +
+                     b_chassis.balance_loop.k[1][4] * b_chassis.balance_loop.state_err[4] +
+                     b_chassis.balance_loop.k[1][5] * b_chassis.balance_loop.state_err[5];
+
+    // lqr离地增益计算
+    V_T_outlandgain = 0;
+    V_Tp_outlandgain = 0;
+    balance_Toutlandgain = 0;
+    balance_Tpoutlandgain = b_chassis.balance_loop.k[1][0] * b_chassis.balance_loop.state_err[0] + b_chassis.balance_loop.k[1][1] * b_chassis.balance_loop.state_err[1];
+
+    if (isnan(b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0))
+    {
+        b_chassis.right_leg.dphi0 = 0.0f;
+        b_chassis.left_leg.dphi0 = 0.0f;
+    }
+    // 双腿协调pid
+    float harmonize_outer = pid_calc(&b_chassis.leg_harmonize_pid_outer, (b_chassis.right_leg.phi0 - b_chassis.left_leg.phi0), 0);
+    float harmonize_inner = pid_calc(&b_chassis.leg_harmonize_pid_inner, (b_chassis.right_leg.dphi0 - b_chassis.left_leg.dphi0), harmonize_outer);
+
+    // 转向pid
+    vw_torque = pid_calc(&b_chassis.vw_pid, chassis_gyro.yaw_Gyro * PI / 180.0f, b_chassis.chassis_ref.vw);
+    b_chassis.vw_limit_rate = 1;
+	VAL_LIMIT(vw_torque, -3.5, 3.5);
+
+    // roll平衡pid
+    roll_F_output_angle = pid_calc(&b_chassis.roll_pid_angle, chassis_gyro.roll_Angle, b_chassis.chassis_ref.roll);
+    roll_leg_F_output   = pid_calc(&b_chassis.roll_leg_F_Rotate_pid,chassis_gyro.roll_Angle, b_chassis.chassis_ref.roll);
+
+    b_chassis.left_leg.leg_length_outer  = pid_calc(&b_chassis.left_leg.leglengthpid_outer, b_chassis.left_leg.l0,b_chassis.chassis_ref.leglength +roll_F_output_angle/2.0f);
+    b_chassis.right_leg.leg_length_outer = pid_calc(&b_chassis.right_leg.leglengthpid_outer, b_chassis.right_leg.l0, b_chassis.chassis_ref.leglength -roll_F_output_angle/2.0f);
+
+    // 腿部竖直力F的计算
+    if(b_chassis.ctrl_mode==CHASSIS_ROTATE)
+    {
+        b_chassis.left_leg.leg_F  =  pid_calc(&b_chassis.left_leg.leglengthpid_inner, b_chassis.left_leg.dl0, b_chassis.left_leg.leg_length_outer)    + (BODY_MASS / 2) * 9.8 + roll_leg_F_output / 2 +b_chassis.balance_loop.Fm*0.5 ;
+        b_chassis.right_leg.leg_F =  pid_calc(&b_chassis.right_leg.leglengthpid_inner, b_chassis.right_leg.dl0, b_chassis.right_leg.leg_length_outer) + (BODY_MASS / 2) * 9.8 - roll_leg_F_output / 2 -b_chassis.balance_loop.Fm*0.5  ;
+    }
+    else
+    {
+        if(jump_state == 2)
+        {
+            b_chassis.left_leg.leg_F  = jump_feedfront + pid_calc(&b_chassis.left_leg.leglengthpid_inner, b_chassis.left_leg.dl0, b_chassis.left_leg.leg_length_outer)     + roll_leg_F_output / 2 +current_fm*0.5f ;
+            b_chassis.right_leg.leg_F = jump_feedfront + pid_calc(&b_chassis.right_leg.leglengthpid_inner, b_chassis.right_leg.dl0, b_chassis.right_leg.leg_length_outer)  - roll_leg_F_output / 2 - current_fm*0.5f -right_leg_F_antifeedforward;
+        }
+        else
+        {
+            b_chassis.left_leg.leg_F  =  pid_calc(&b_chassis.left_leg.leglengthpid_inner, b_chassis.left_leg.dl0, b_chassis.left_leg.leg_length_outer)    + (BODY_MASS / 2) * 9.8 + roll_leg_F_output / 2 +current_fm*0.5f ;
+            b_chassis.right_leg.leg_F =  pid_calc(&b_chassis.right_leg.leglengthpid_inner, b_chassis.right_leg.dl0, b_chassis.right_leg.leg_length_outer) + (BODY_MASS / 2) * 9.8 - roll_leg_F_output / 2 - current_fm*0.5f ;
+        }
+    }
+    b_chassis.balance_loop.lqrOutT = balance_Tgain;
+	
+    b_chassis.balance_loop.lqrOutTp = balance_Tpgain*1.5f;
+
+    // 此处的T0为phi1电机的扭矩，另一个是phi4的
+    if (wheel_state_estimate(&b_chassis.left_leg) || (b_chassis.ctrl_mode == CHASSIS_INIT)) // 如果左腿未离地或为初始化模式
+    {
+        // 设置左腿关节的扭矩，并计算左轮的驱动扭矩。
+        leg_conv(b_chassis.left_leg.leg_F, (b_chassis.balance_loop.lqrOutTp - harmonize_inner) / 2.0f, b_chassis.left_leg.phi1, b_chassis.left_leg.phi4, b_chassis.left_leg.T);
+        b_chassis.joint_T[1] = JM2_POLARITY * b_chassis.left_leg.T[0];
+        b_chassis.joint_T[2] = JM3_POLARITY * b_chassis.left_leg.T[1];
+        if(jump_state>=2)
+        {
+            b_chassis.driving_T[0]=0;
+        }
+        else
+            b_chassis.driving_T[0] = (b_chassis.balance_loop.lqrOutT / 2.0f + vw_torque * b_chassis.vw_limit_rate / 2.0f) * LEFT_WHEEL_POLARITY;
+
+    }
+    else // 离地
+    {
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+        leg_conv(b_chassis.left_leg.leg_F, (balance_Tpoutlandgain - harmonize_inner) / 2.0f, b_chassis.left_leg.phi1, b_chassis.left_leg.phi4, b_chassis.left_leg.T);
+        b_chassis.joint_T[1] = JM2_POLARITY * b_chassis.left_leg.T[0];
+        b_chassis.joint_T[2] = JM3_POLARITY * b_chassis.left_leg.T[1];
+        b_chassis.driving_T[0] = 0;
+    }
+    // 右腿与左腿逻辑相同
+    if (wheel_state_estimate(&b_chassis.right_leg) || (b_chassis.ctrl_mode == CHASSIS_INIT))
+    {
+        leg_conv(b_chassis.right_leg.leg_F, (b_chassis.balance_loop.lqrOutTp + harmonize_inner) / 2.0f, b_chassis.right_leg.phi1, b_chassis.right_leg.phi4, b_chassis.right_leg.T);
+        b_chassis.joint_T[0] = JM1_POLARITY * b_chassis.right_leg.T[0];
+        b_chassis.joint_T[3] = JM4_POLARITY * b_chassis.right_leg.T[1];
+        if(jump_state>=2)
+        {
+            b_chassis.driving_T[1]=0;
+        }
+        else
+            b_chassis.driving_T[1] = (b_chassis.balance_loop.lqrOutT / 2.0f - vw_torque * b_chassis.vw_limit_rate / 2.0f) * RIGHT_WHEEL_POLARITY;
+    }
+    else
+    {
+        b_chassis.chassis_ref.y_position = b_chassis.balance_loop.x;
+        leg_conv(b_chassis.right_leg.leg_F, (balance_Tpoutlandgain + harmonize_inner) / 2.0f, b_chassis.right_leg.phi1, b_chassis.right_leg.phi4, b_chassis.right_leg.T);
+        b_chassis.joint_T[0] = JM1_POLARITY * b_chassis.right_leg.T[0];
+        b_chassis.joint_T[3] = JM4_POLARITY * b_chassis.right_leg.T[1];
+        b_chassis.driving_T[1] = 0;
+    }
+
+
+        VAL_LIMIT(b_chassis.joint_T[1], -JOINT_MAX_T, JOINT_MAX_T);
+        VAL_LIMIT(b_chassis.joint_T[2], -JOINT_MAX_T, JOINT_MAX_T);
+        VAL_LIMIT(b_chassis.joint_T[0], -JOINT_MAX_T, JOINT_MAX_T);
+        VAL_LIMIT(b_chassis.joint_T[3], -JOINT_MAX_T, JOINT_MAX_T);
+	if(if_middle_leg&&if_low_middle_leg==0)
+	{
+     VAL_LIMIT(b_chassis.driving_T[0], -4.0, 4.0);
+    VAL_LIMIT(b_chassis.driving_T[1], -4.0, 4.0);
+	}
+    else
+	{
+    VAL_LIMIT(b_chassis.driving_T[0], -WHEEL_MAX_T, WHEEL_MAX_T);
+    VAL_LIMIT(b_chassis.driving_T[1], -WHEEL_MAX_T, WHEEL_MAX_T);
+	}
+
+
+}
+
+/**
+************************************************************************************************************************
+* @Name     : wheel_state_estimate
+* @brief    : 底盘离地检测函数
+* @param		: leg
+* @retval   : wheel_state
+* @Note     :
+************************************************************************************************************************
+**/
+
+uint8_t wheel_state_estimate(leg_state_t *leg)
+{
+    if (leg->leg_FN < 20) // 如果支持力小于20N 离地 轮子状态为0  leg->leg_FN < 20
+    {
+
+        leg->wheel_state = 0;
+        return 0;
+    }
+    else // 未离地 轮子状态为1
+    {
+        leg->wheel_state = 1;
+        return 1;
+    }
+}
+float transform_angle_0_2pi(float angle)
+{
+    float new_angle=fmod(angle+2*PI,2*PI);
+    {
+        return (new_angle<0)?new_angle+2*PI:new_angle;
+    }
+}
+float normalize_angle_pi(float angle)
+{
+    // 如果是无穷大或非数字，直接返回 0 或指定值
+    if (isinf(angle) || isnan(angle))
+    {
+        return 0.0f; // 默认返回 0，可根据需要修改
+    }
+
+    // 使用 fmod 将角度归一化到 [-2PI, 2PI]
+    angle = fmod(angle, 2 * PI);
+
+    // 调整到 [-PI, PI] 范围
+    if (angle > PI)
+    {
+        angle -= 2 * PI;
+    }
+    else if (angle < -PI)
+    {
+        angle += 2 * PI;
+    }
+    return angle;
+}
+void lqr_k(double L0, double K[12])
+{
+    double t2;
+    double t3;
+    /* LQR_K_T
+      K = LQR_K_T(L0)
+      This function was generated by the Symbolic Math Toolbox version 23.2.
+
+       2024-09-30 23:29:47    % Q 1 10 100 20 1000 1
+     2024-12-7 17:16 %
+    */
+
+    t2 = L0 * L0;
+    t3 = L0 * L0 * L0;
+
+
+    if(usart_chassis_data.overstep_cmd)
+    {
+
+        K[0] = ((L0 * -217.03112215744511 + t2 * 507.66219856741537) -
+                t3 * 475.38770701422811) -
+               7.9816161603904732;
+        K[1] = ((L0 * 4.352307385623428 - t2 * 194.99251742927771) +
+                t3 * 283.52248945513918) +
+               24.056968994129878;
+        K[2] = ((L0 * -20.342813464640621 + t2 * 25.632859807906279) -
+                t3 * 25.445739190621751) -
+               0.49933304244129151;
+        K[3] = ((L0 * 4.50862133423868 - t2 * 26.7394717512558) +
+                t3 * 33.09938459370408) +
+               2.562453573205377;
+        K[4] = ((L0 * -31.79082911192582 + t2 * 84.408577513177462) -
+                t3 * 80.483841324243159) -
+               1.165590391764054;
+        K[5] = ((L0 * -9.5415659162282935 - t2 * 13.79260273135462) +
+                t3 * 34.375630765720629) +
+               6.14026640085731;
+        K[6] = ((L0 * -33.261831664231529 + t2 * 86.717456195619619) -
+                t3 * 83.634104937352717) -
+               2.5163866370796839;
+        K[7] = ((L0 * -25.633215527774169 + t2 * 25.863264236658409) -
+                t3 * 2.2666717039527748) +
+               9.2040432646512258;
+        K[8] = ((L0 * -127.0816908575799 + t2 * 246.65384297790371) -
+                t3 * 190.60529659460991) +
+               31.340059007372179;
+        K[9] = ((L0 * 187.94560962281261 - t2 * 505.73457451916659) +
+                t3 * 484.65273640944639) +
+               36.173165094452933;
+        K[10] = ((L0 * -14.52847156470852 + t2 * 30.75280167359951) -
+                 t3 * 25.94786387077291) +
+                3.49406368772896;
+        K[11] = ((L0 * 15.055215392950821 - t2 * 39.336297683398911) +
+                 t3 * 37.0248736463519) +
+                2.956768257806544;
+
+    }
+
+    else if( b_chassis.jump_flag==1)
+    {
+
+//        K[0] = ((L0 * -279.37597539749481 + t2 * 627.47571666585793) -
+//                t3 * 588.85275095787313) -
+//               12.2368424222219;
+//        K[1] = ((L0 * -1.497966527705809 - t2 * 84.769432750430553) +
+//                t3 * 126.5636452638075) +
+//               14.163171085723389;
+//        K[2] = ((L0 * -29.842580299140231 + t2 * 34.048651493012549) -
+//                t3 * 35.759128382955879) -
+//               0.96409118147280681;
+//        K[3] = ((L0 * 2.294873761333716 - t2 * 12.706601086924509) +
+//                t3 * 15.70352324401944) +
+//               1.610418982665472;
+//        K[4] = ((L0 * -45.496441557110167 + t2 * 119.41340758673471) -
+//                t3 * 113.31481555620179) -
+//               2.4002640173765442;
+//        K[5] = ((L0 * -7.21612389476464 - t2 * 2.0648368802192558) +
+//                t3 * 12.936423897533221) +
+//               3.9354154863630759;
+//        K[6] = ((L0 * -48.961953130657577 + t2 * 124.20110377949131) -
+//                t3 * 118.7722366481526) -
+//               4.7294912412506;
+//        K[7] = ((L0 * -16.648412354540529 + t2 * 20.79133495342781) -
+//                t3 * 8.0932499666525484) +
+//               5.8933018461168878;
+//        K[8] = ((L0 * -178.5829600253409 + t2 * 408.80869553442147) -
+//                t3 * 363.12307378393189) +
+//               37.990311110710088;
+//        K[9] = ((L0 * 95.315970420994489 - t2 * 268.8822091814921) +
+//                t3 * 267.35200701672437) +
+//               50.037775368151038;
+//        K[10] = ((L0 * -18.103831663247689 + t2 * 41.232670780641527) -
+//                 t3 * 36.772887131321887) +
+//                4.0903341370725643;
+//        K[11] = ((L0 * 7.706150268232876 - t2 * 20.831106294820831) +
+//                 t3 * 20.18359063734032) +
+//                4.0910116901830831;
+
+   K[0] = ((L0 * -226.750089808299 + t2 * 514.65118395185516) -
+          t3 * 482.54259307676818) -
+         8.4470334737326;
+  K[1] = ((L0 * 7.7056026147487371 - t2 * 184.6495387235401) +
+          t3 * 263.54779883080619) +
+         22.43155984129325;
+  K[2] = ((L0 * -21.73342662552529 + t2 * 23.453996428353321) -
+          t3 * 24.514783371017629) -
+         0.55194530791838248;
+  K[3] = ((L0 * 4.9289542467451612 - t2 * 25.18122758685346) +
+          t3 * 30.553800701351541) +
+         2.4198679394953091;
+  K[4] = ((L0 * -33.152783507287431 + t2 * 88.365187252991134) -
+          t3 * 84.48173199796291) -
+         1.3252720454284339;
+  K[5] = ((L0 * -9.687501668871958 - t2 * 10.367649641547811) +
+          t3 * 29.442609754242341) +
+         5.8933386333446052;
+  K[6] = ((L0 * -39.401838953734561 + t2 * 102.02442611792721) -
+          t3 * 98.254028022896293) -
+         2.8573119096709592;
+  K[7] = ((L0 * -24.481477826449389 + t2 * 21.4238793563161) +
+          t3 * 2.7199348778150321) +
+         9.36342074110025;
+  K[8] = ((L0 * -134.3235145884116 + t2 * 269.23487289473718) -
+          t3 * 214.2869364820011) +
+         32.461784837886519;
+  K[9] = ((L0 * 173.86827743904061 - t2 * 470.98024371633858) +
+          t3 * 453.93262814052792) +
+         38.285097683444768;
+  K[10] = ((L0 * -15.00515794650468 + t2 * 31.972390011065929) -
+           t3 * 27.136124172517761) +
+          3.6182435832289972;
+  K[11] = ((L0 * 14.10974801751925 - t2 * 36.8380063831802) +
+           t3 * 34.696567950637338) +
+          3.0841506525669842;
+
+
+
+
+    }
+    else
+    {
+
+        if(b_chassis.balance_loop.L0>0.24f)
+        {
+			if(b_chassis.balance_loop.L0>0.30f)
+			{
+            K[0] = ((L0 * -216.9069509151885 + t2 * 504.16060195962928) -
+                    t3 * 472.81658198020648) -
+                   8.2037016141478247;
+            K[1] = ((L0 * 4.8743959425748864 - t2 * 171.88178356839009) +
+                    t3 * 247.90913217182941) +
+                   21.38854988517814;
+            K[2] = ((L0 * -21.185659782556019 + t2 * 27.126247183137561) -
+                    t3 * 27.275033880464051) -
+                   0.57089040913879718;
+            K[3] = ((L0 * 3.792473884303222 - t2 * 23.287032400085678) +
+                    t3 * 29.08122552474234) +
+                   2.4455216854265651;
+            K[4] = ((L0 * -33.366594631602347 + t2 * 88.717780045924272) -
+                    t3 * 84.7561336001883) -
+                   1.3192013261892681;
+            K[5] = ((L0 * -9.6108786526999488 - t2 * 10.666604345611651) +
+                    t3 * 29.635794992361539) +
+                   5.8963578227899616;
+            K[6] = ((L0 * -34.084237663383618 + t2 * 88.591663252446551) -
+                    t3 * 85.546219879022871) -
+                   2.704241397690462;
+            K[7] = ((L0 * -23.822393244525571 + t2 * 25.220429305946482) -
+                    t3 * 4.0674924497022644) +
+                   8.542664052283877;
+            K[8] = ((L0 * -120.41433110519679 + t2 * 241.22056826744679) -
+                    t3 * 192.2660216368219) +
+                   29.0777356733434;
+            K[9] = ((L0 * 155.9298221421258 - t2 * 422.43009112379929) +
+                    t3 * 407.23905502216672) +
+                   34.275891204742543;
+            K[10] = ((L0 * -14.28556507548673 + t2 * 30.591975931515531) -
+                     t3 * 26.050010516101739) +
+                    3.408367955494537;
+            K[11] = ((L0 * 13.39242927953765 - t2 * 35.194870313409787) +
+                     t3 * 33.3007339060381) +
+                    2.9425124268525309;}
+
+            else
+			{
+           K[0] = ((L0 * -210.00065566524941 + t2 * 474.66249236490972) -
+                    t3 * 443.14659131176057) -
+                   7.3187466086361423;
+            K[1] = ((L0 * 15.3692326784181 - t2 * 200.78115802579279) +
+                    t3 * 276.6694464904819) +
+                   20.342836517300789;
+            K[2] = ((L0 * -20.646946719940662 + t2 * 23.933718642553) -
+                    t3 * 24.68210466389996) -
+                   0.521080646835802;
+            K[3] = ((L0 * 4.6195871995653128 - t2 * 25.601967348553131) +
+                    t3 * 31.54787479178048) +
+                   2.4901295707462432;
+            K[4] = ((L0 * -32.293949661112073 + t2 * 85.991669351744832) -
+                    t3 * 82.12638815985116) -
+                   1.23299615937791;
+            K[5] = ((L0 * -9.7616256621603625 - t2 * 11.967684069980621) +
+                    t3 * 32.041259298974552) +
+                   6.0533937101600479;
+            K[6] = ((L0 * -36.2795935841506 + t2 * 93.546169216154865) -
+                    t3 * 89.931761195423363) -
+                   2.4904368792770719;
+            K[7] = ((L0 * -22.857083434381082 + t2 * 17.605698246774981) +
+                    t3 * 6.2300906003711312) +
+                   8.96271782178964;
+            K[8] = ((L0 * -130.23410040094441 + t2 * 256.5235028229194) -
+                    t3 * 200.68625587191269) +
+                   31.78203084105218;
+            K[9] = ((L0 * 182.62218156377389 - t2 * 493.16705447790338) +
+                    t3 * 473.90603965959178) +
+                   37.012356695371722;
+            K[10] = ((L0 * -14.61043986738666 + t2 * 30.899593392549939) -
+                     t3 * 26.05851268190338) +
+                    3.5340111564637078;
+            K[11] = ((L0 * 14.501665541640421 - t2 * 37.727295512019431) +
+                     t3 * 35.409097730066293) +
+                    3.02254020597961;}
+        }
+        else
+        {
+  K[0] = ((L0 * -236.17597486225739 + t2 * 552.8023671953365) -
+          t3 * 512.483622867829) -
+         6.2454476824846328;
+  K[1] = ((L0 * 39.7634550273008 - t2 * 312.78502749477389) +
+          t3 * 406.541339118727) +
+         22.58755087083313;
+  K[2] = ((L0 * -24.677197280079771 + t2 * 37.098832909994869) -
+          t3 * 35.631831337354583) -
+         0.37440580688216768;
+  K[3] = ((L0 * 8.2724923916926727 - t2 * 41.597539567456437) +
+          t3 * 49.738125847961172) +
+         2.783790062702697;
+  K[4] = ((L0 * -33.008892326009487 + t2 * 85.96912023755911) -
+          t3 * 80.966775048874922) -
+         0.67815673259539033;
+  K[5] = ((L0 * -1.824706291274129 - t2 * 35.7858175872468) +
+          t3 * 55.797324983249872) +
+         5.3201275961895629;
+  K[6] = ((L0 * -37.039186403716279 + t2 * 95.827269321795072) -
+          t3 * 91.524834634428657) -
+         1.88159680861033;
+  K[7] = ((L0 * -15.66951449180255 - t2 * 5.3386637159726078) +
+          t3 * 29.834225403683671) +
+         8.40572490763844;
+  K[8] = ((L0 * -107.689068911857 + t2 * 205.87555534334041) -
+          t3 * 158.11407360728131) +
+         27.466702602081721;
+  K[9] = ((L0 * 168.555993488275 - t2 * 448.84713943820378) +
+          t3 * 427.79114171823528) +
+         31.862787645256191;
+  K[10] = ((L0 * -13.12102107468916 + t2 * 27.46917482153437) -
+           t3 * 23.046271103738089) +
+          3.2324189758432968;
+  K[11] = ((L0 * 13.77592406288737 - t2 * 35.351894699627657) +
+           t3 * 32.886182709952863) +
+          2.816940275578768;
+
+
+        }
+
+    }
+
+
+}
